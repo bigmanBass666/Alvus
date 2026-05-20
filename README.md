@@ -306,7 +306,7 @@ Around 2 MB at idle. It's a single static Go binary with no runtime overhead —
 ## Roadmap
 
 - [x] Hot-reload when .env changes (no restart needed)
-- [ ] Per-key request counters in `/health`
+- [x] Per-key request counters in `/health`
 - [ ] Web dashboard (opt-in, zero-dep binary stays the same)
 
 ---
