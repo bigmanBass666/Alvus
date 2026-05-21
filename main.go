@@ -21,13 +21,13 @@ import (
 // ── Key Pool ──────────────────────────────────
 
 type KeyPool struct {
-	counter      uint64
-	keys         []string
-	cooldowns    []time.Time
-	disabled     []bool
+	counter        uint64
+	keys           []string
+	cooldowns      []time.Time
+	disabled       []bool
 	requestHistory [][]time.Time // timestamps of requests in the last 60s per key
-	lastUsed     []time.Time
-	mu           sync.Mutex
+	lastUsed       []time.Time
+	mu             sync.Mutex
 }
 
 func NewKeyPool(keys []string) *KeyPool {
@@ -163,8 +163,6 @@ func (p *KeyPool) GetKeyDetails() []map[string]interface{} {
 			"last_used":           p.lastUsed[i].Format(time.RFC3339),
 			"cooldown_until":      p.cooldowns[i].Format(time.RFC3339),
 		}
-
-		// Determine label
 		keyDetail["status"] = p.keyStatusLabel(i, now)
 		details[i] = keyDetail
 	}
@@ -183,10 +181,11 @@ func (p *KeyPool) IncrementRequestCount(idx int) {
 // ── Config ────────────────────────────────────
 
 type Config struct {
-	TargetBase  string
-	Port        string
-	MaxRetries  int
-	CooldownSec int
+	TargetBase   string
+	GenaiBase    string
+	Port         string
+	MaxRetries   int
+	CooldownSec  int
 }
 
 func parseKeysFromEnv() ([]string, error) {
@@ -213,6 +212,7 @@ func buildConfig() (Config, *KeyPool, error) {
 	}
 	cfg := Config{
 		TargetBase:  strings.TrimRight(getenv("TARGET_BASE_URL", "https://integrate.api.nvidia.com/v1"), "/"),
+		GenaiBase:   strings.TrimRight(getenv("GENAI_BASE_URL", "https://ai.api.nvidia.com"), "/"),
 		Port:        getenv("PORT", "3000"),
 		MaxRetries:  10,
 		CooldownSec: 60,
@@ -229,7 +229,7 @@ func loadConfig() (Config, *KeyPool) {
 }
 
 func reloadConfig() (Config, *KeyPool, error) {
-	for _, k := range []string{"API_KEYS", "TARGET_BASE_URL", "PORT", "COOLDOWN_SEC"} {
+	for _, k := range []string{"API_KEYS", "TARGET_BASE_URL", "GENAI_BASE_URL", "PORT", "COOLDOWN_SEC"} {
 		os.Unsetenv(k)
 	}
 	loadDotEnv(".env")
@@ -260,19 +260,19 @@ func newServerState(cfg Config, pool *KeyPool) *ServerState {
 }
 
 func (s *ServerState) healthHandler(w http.ResponseWriter, r *http.Request) {
-    s.mu.RLock()
-    pool := s.pool
-    s.mu.RUnlock()
-    w.Header().Set("Content-Type", "application/json")
-    
-    details := pool.GetKeyDetails()
-    jsonDetails, err := json.Marshal(details)
-    if err != nil {
-        http.Error(w, "failed to marshal key details", http.StatusInternalServerError)
-        return
-    }
-    
-    fmt.Fprintf(w, `{"status":"ok","keys":%d,"details":%s}`, len(pool.keys), jsonDetails)
+	s.mu.RLock()
+	pool := s.pool
+	s.mu.RUnlock()
+	w.Header().Set("Content-Type", "application/json")
+
+	details := pool.GetKeyDetails()
+	jsonDetails, err := json.Marshal(details)
+	if err != nil {
+		http.Error(w, "failed to marshal key details", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprintf(w, `{"status":"ok","keys":%d,"details":%s}`, len(pool.keys), jsonDetails)
 }
 
 func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
@@ -299,14 +299,23 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	path := r.URL.Path
-	if strings.HasSuffix(cfg.TargetBase, "/v1") && strings.HasPrefix(path, "/v1") {
-		path = path[3:]
+	// Route /genai/ paths to GenaiBase, everything else to TargetBase
+	var target string
+	if strings.Contains(r.URL.Path, "/genai/") {
+		target = cfg.GenaiBase + r.URL.Path
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+	} else {
+		path := r.URL.Path
+		if strings.HasSuffix(cfg.TargetBase, "/v1") && strings.HasPrefix(path, "/v1") {
+			path = path[3:]
+		}
+		if r.URL.RawQuery != "" {
+			path += "?" + r.URL.RawQuery
+		}
+		target = cfg.TargetBase + path
 	}
-	if r.URL.RawQuery != "" {
-		path += "?" + r.URL.RawQuery
-	}
-	target := cfg.TargetBase + path
 
 	log.Printf("→ %s %s (%d bytes)", r.Method, target, len(bodyBytes))
 
@@ -443,7 +452,7 @@ func watchEnvFile(state *ServerState, stop <-chan struct{}) {
 			state.cfg = newCfg
 			state.pool = newPool
 			state.mu.Unlock()
-			log.Printf("✅ Reloaded — %d keys, target: %s", len(newPool.keys), newCfg.TargetBase)
+			log.Printf("✅ Reloaded — %d keys, target: %s, genai: %s", len(newPool.keys), newCfg.TargetBase, newCfg.GenaiBase)
 		}
 	}
 }
@@ -475,7 +484,7 @@ func main() {
 		}
 	}()
 
-	log.Printf("⚡ Alvus :%s → %s (%d keys)", cfg.Port, cfg.TargetBase, len(pool.keys))
+	log.Printf("⚡ Alvus :%s → %s | genai → %s (%d keys)", cfg.Port, cfg.TargetBase, cfg.GenaiBase, len(pool.keys))
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("❌ Server error: %v", err)
 	}
