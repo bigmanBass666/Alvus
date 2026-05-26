@@ -65,19 +65,19 @@ If it speaks OpenAI-compatible API, it works with Alvus.
 
 ## Features
 
-|                                |                                                                             |
-| ------------------------------ | --------------------------------------------------------------------------- |
-| 🔑 **Key pool**                | Multiple keys, one endpoint. Distribute load transparently                  |
-| 🔄 **Round-robin**             | Even distribution across all healthy keys                                   |
-| 🚫 **Silent retry on 429**     | Failed key enters cooldown, request retries instantly with the next         |
-| ⏱️ **Retry-After support**     | Respects upstream `Retry-After` headers — no blind fixed waits              |
-| 🔑 **Auto-disable on 401/403** | Invalid or revoked keys are permanently removed from the pool               |
-| 📡 **Streaming passthrough**   | SSE and chunked responses piped with zero buffering overhead                |
-| ❤️ **Health endpoint**         | `GET /health` shows live key status, cooldown timers, and requests/minute   |
-| 🪶 **Zero dependencies**       | Pure Go stdlib. One file. One binary                                        |
-| 🔧 **`.env` support**          | Built-in parser — no `godotenv`, no extras                                  |
-| 🖥️ **Runs anywhere**           | linux/amd64, arm64, arm, **386** — including Pi Zero and older x86 hardware |
-| 💾 **~2 MB idle RAM**          | Static binary, no runtime, won't compete with your models for memory        |
+|                                    |                                                                             |
+| ---------------------------------- | --------------------------------------------------------------------------- |
+| 🔑 **Key pool**                    | Multiple keys, one endpoint. Distribute load transparently                  |
+| 🔄 **Round-robin**                 | Even distribution across all healthy keys                                   |
+| 🚫 **Silent retry on 429/502/503** | Failed key enters cooldown, request retries instantly with the next         |
+| ⏱️ **Retry-After support**         | Respects upstream `Retry-After` headers — no blind fixed waits              |
+| 🔑 **Auto-disable on 401/403**     | Invalid or revoked keys are permanently removed from the pool               |
+| 📡 **Streaming passthrough**       | SSE and chunked responses piped with zero buffering overhead                |
+| ❤️ **Health endpoint**             | `GET /health` shows live key status, cooldown timers, and requests/minute   |
+| 🪶 **Zero dependencies**           | Pure Go stdlib. One file. One binary                                        |
+| 🔧 **`.env` support**              | Built-in parser — no `godotenv`, no extras                                  |
+| 🖥️ **Runs anywhere**               | linux/amd64, arm64, arm, **386** — including Pi Zero and older x86 hardware |
+| 💾 **~2 MB idle RAM**              | Static binary, no runtime, won't compete with your models for memory        |
 
 ---
 
@@ -125,7 +125,7 @@ PORT=3000
 # Upstream API base URL (default: NVIDIA NIM)
 TARGET_BASE_URL=https://integrate.api.nvidia.com/v1
 
-# Seconds to cool down a key after a 429 (default: 60)
+# Seconds to cool down a key after a 429, 502, or 503 (default: 60)
 COOLDOWN_SEC=60
 ```
 
@@ -143,7 +143,7 @@ Real environment variables take precedence over `.env` — useful for systemd or
 ⚡ Alvus started on :3000
    Target  : https://integrate.api.nvidia.com/v1
    Keys    : 3 loaded
-   Cooldown: 60s per key on 429
+   Cooldown: 60s per key on 429/502/503
 ```
 
 ---
@@ -210,7 +210,7 @@ aider --openai-api-base http://localhost:3000/v1 --openai-api-key sk-dummy
 4. Request forwarded upstream with that key injected
    │
    ├── ✅ 2xx/3xx → request count incremented, headers + body streamed back, done
-   ├── ❄️ 429 → key enters cooldown, retry with next key
+   ├── ❄️ 429/502/503 → key enters cooldown, retry with next key
    ├── 🔑 401/403 → key permanently removed from pool
    └── ⚠️ other 4xx/5xx → passed through as-is
 ```

@@ -348,7 +348,7 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		switch resp.StatusCode {
-		case http.StatusTooManyRequests:
+		case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable:
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			cooldown := time.Duration(cfg.CooldownSec) * time.Second
