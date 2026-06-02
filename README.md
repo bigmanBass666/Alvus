@@ -74,6 +74,9 @@ If it speaks OpenAI-compatible API, it works with Alvus.
 | 🔑 **Auto-disable on 401/403**     | Invalid or revoked keys are permanently removed from the pool               |
 | 📡 **Streaming passthrough**       | SSE and chunked responses piped with zero buffering overhead                |
 | ❤️ **Health endpoint**             | `GET /health` shows live key status, cooldown timers, and requests/minute   |
+| 🖥️ **Interactive Dashboard**      | `GET /dashboard` — Premium Glassmorphism Dark UI for real-time monitoring   |
+| ⚡ **Live Activity Logs**          | Searchable, 1000-entry memory cache to track all request activity          |
+| 🔧 **Dynamic Configuration**      | Update keys and base URLs directly from the dashboard; writes to `.env`     |
 | 🪶 **Zero dependencies**           | Pure Go stdlib. One file. One binary                                        |
 | 🔧 **`.env` support**              | Built-in parser — no `godotenv`, no extras                                  |
 | 🖥️ **Runs anywhere**               | linux/amd64, arm64, arm, **386** — including Pi Zero and older x86 hardware |
@@ -329,7 +332,7 @@ Around 2 MB at idle. It's a single static Go binary with no runtime overhead —
 
 - [x] Hot-reload when .env changes (no restart needed)
 - [x] Per-key request counters and detailed status in `/health`
-- [ ] Web dashboard (opt-in, zero-dep binary stays the same)
+- [x] Web dashboard (opt-in, zero-dep binary stays the same)
 
 ---
 
