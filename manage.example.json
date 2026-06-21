@@ -1,0 +1,15 @@
+{
+  "providers": [
+    {
+      "name": "nvidia",
+      "dir": "proxies/nvidia",
+      "port": 4000
+    },
+    {
+      "name": "openai",
+      "dir": "proxies/openai",
+      "port": 4001,
+      "disabled": true
+    }
+  ]
+}

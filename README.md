@@ -1,360 +1,284 @@
-# ⚡ Alvus
+# ⚡ Alvus — Multi-Instance Fork
 
-> **~5 MB binary. Zero dependencies. Zero 429s.**
-> A lightweight Go proxy that silently absorbs rate limit errors and keeps your AI agent running.
-
-[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
-[![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square)]()
-[![Works with OpenClaw](https://img.shields.io/badge/works%20with-OpenClaw-orange?style=flat-square)]()
-[![Works with Cline](https://img.shields.io/badge/works%20with-Cline-blueviolet?style=flat-square)]()
-[![Works with Cursor](https://img.shields.io/badge/works%20with-Cursor-blue?style=flat-square)]()
+> 上游原版: [OmitNomis/Alvus](https://github.com/OmitNomis/Alvus)
+>
+> 本 fork 新增: **管理模式**（`--manage`），一个命令启动/管理多个 API 供应商代理。
 
 ---
 
-## The Problem
+## 目录
 
-You're in the middle of an agentic session — OpenClaw is halfway through a task, Cline is on a roll, your agent is _doing things_ — and then:
-
-```
-Error: 429 Too Many Requests
-```
-
-The loop breaks. Context is lost. You're staring at a spinner.
-
-If you use free-tier providers like **NVIDIA NIM**, this happens constantly. Free keys cap around 40 RPM. One productive session burns through that in seconds.
-
-## The Solution
-
-Alvus sits between your agent and the upstream API. You give it a pool of keys. It handles everything else — round-robin distribution, per-key cooldowns, automatic retries, streaming passthrough. Your agent never sees a 429.
-
-```
-Any OpenAI-compatible agent or IDE
-              │
-              ▼
-   ┌─────────────────────┐
-   │        Alvus        │  ← localhost:3000
-   │                     │
-   │  [key1] ✅ ready    │
-   │  [key2] ✅ ready    │  ──→  NVIDIA NIM / any OpenAI-compatible API
-   │  [key3] ❄️ cooling  │
-   └─────────────────────┘
-```
-
-3 keys × 40 RPM = 120+ effective RPM. The math is simple. The setup is simpler.
-
-> **Idle RAM usage: ~2 MB.** Alvus is a single static binary with no runtime. It won't compete with your models for memory.
+- [这是什么](#这是什么)
+- [快速上手](#快速上手)
+- [单实例模式（跟原版一样）](#单实例模式跟原版一样)
+- [管理模式（本 fork 新增）](#管理模式本-fork-新增)
+- [如何新增一个供应商](#如何新增一个供应商)
+- [常见场景](#常见场景)
+- [目录结构说明](#目录结构说明)
+- [回归测试](#回归测试)
 
 ---
 
-## Works With Everything
+## 这是什么
 
-If it speaks OpenAI-compatible API, it works with Alvus.
+**Alvus** 是一个零依赖的 Go 反向代理。你给它一堆 API key，它在中间做轮换——遇到 429/502/503 自动换下一个 key，你的 AI 工具永远看不见限流错误。
 
-| Tool                                             | Type              | Setup                               |
-| ------------------------------------------------ | ----------------- | ----------------------------------- |
-| [OpenClaw](https://github.com/openclaw/openclaw) | AI agent          | Set base URL in provider config     |
-| [PicoClaw](https://github.com/sipeed/picoclaw)   | Lightweight agent | Set `api_base` in config.json       |
-| [Nanobot](https://github.com/HKUDS/nanobot)      | Lightweight agent | Set `api_base` in config.yaml       |
-| [Cline](https://github.com/cline/cline)          | VS Code agent     | OpenAI Compatible provider          |
-| [Cursor](https://cursor.sh)                      | IDE               | Base URL override in settings       |
-| [Aider](https://aider.chat)                      | CLI agent         | `--openai-api-base` flag            |
-| Any OpenAI-compatible client                     | —                 | Point at `http://localhost:3000/v1` |
+**本 fork** 在保留所有原功能的基础上，加了**管理模式**：一个 `alvus.exe` 同时管理多个供应商实例（比如 NVIDIA、OpenAI、DeepSeek 各跑一个，互不干扰）。
 
 ---
 
-## Features
-
-|                                    |                                                                             |
-| ---------------------------------- | --------------------------------------------------------------------------- |
-| 🔑 **Key pool**                    | Multiple keys, one endpoint. Distribute load transparently                  |
-| 🔄 **Round-robin**                 | Even distribution across all healthy keys                                   |
-| 🚫 **Silent retry on 429/502/503** | Failed key enters cooldown, request retries instantly with the next         |
-| ⏱️ **Retry-After support**         | Respects upstream `Retry-After` headers — no blind fixed waits              |
-| 🔑 **Auto-disable on 401/403**     | Invalid or revoked keys are permanently removed from the pool               |
-| 📡 **Streaming passthrough**       | SSE and chunked responses piped with zero buffering overhead                |
-| ❤️ **Health endpoint**             | `GET /health` shows live key status, cooldown timers, and requests/minute   |
-| 🖥️ **Interactive Dashboard**      | `GET /dashboard` — Premium Glassmorphism Dark UI for real-time monitoring   |
-| ⚡ **Live Activity Logs**          | Searchable, 1000-entry memory cache to track all request activity          |
-| 🔧 **Dynamic Configuration**      | Update keys and base URLs directly from the dashboard; writes to `.env`     |
-| 🪶 **Zero dependencies**           | Pure Go stdlib. One file. One binary                                        |
-| 🔧 **`.env` support**              | Built-in parser — no `godotenv`, no extras                                  |
-| 🖥️ **Runs anywhere**               | linux/amd64, arm64, arm, **386** — including Pi Zero and older x86 hardware |
-| 💾 **~2 MB idle RAM**              | Static binary, no runtime, won't compete with your models for memory        |
-
----
-
-## Quickstart
-
-### 1. Get the binary
-
-**Build from source** (requires Go 1.21+):
+## 快速上手
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/alvus.git
-cd alvus
-go build -o alvus main.go
+# 编译（需要 Go 1.21+）
+cd src && go build -o alvus.exe .
+
+# 双击启动单实例（跟原来一样）
+./alvus.exe -local
+
+# 管理模式启动多供应商
+./alvus.exe --manage manage.json
 ```
-
-**Cross-compile for a remote server** (e.g. Raspberry Pi Zero, 32-bit x86):
-
-```bash
-# Pi Zero / older ARM
-GOOS=linux GOARCH=arm CGO_ENABLED=0 go build -o alvus main.go
-
-# 32-bit x86 (Atom, old netbooks, salvaged hardware)
-GOOS=linux GOARCH=386 CGO_ENABLED=0 go build -o alvus main.go
-```
-
-The binary is fully static — drop it on the machine and run it. No runtime, no dependencies, no install step.
-
-**Download a prebuilt release:**
-
-Go to [Releases](../../releases) and grab the binary for your platform.
 
 ---
 
-### 2. Configure
+## 单实例模式（跟原版一样）
 
-Create `.env` in the same directory as the binary:
+用法跟原版完全一致，没有任何行为变化。
+
+### 配置 `.env`
 
 ```env
-# Your API keys, comma-separated
-API_KEYS=nvapi-xxxxxxxxxxxx,nvapi-yyyyyyyyyyyy,nvapi-zzzzzzzzzzzz
-
-# Port to listen on (default: 3000)
-PORT=3000
-
-# Upstream API base URL (default: NVIDIA NIM)
+PORT=4000
 TARGET_BASE_URL=https://integrate.api.nvidia.com/v1
-
-# Seconds to cool down a key after a 429, 502, or 503 (default: 60)
+GENAI_BASE_URL=https://ai.api.nvidia.com
+API_KEYS=key1,key2,key3
 COOLDOWN_SEC=60
 ```
 
-Real environment variables take precedence over `.env` — useful for systemd or containers.
+### 启动
+
+```bash
+./alvus.exe -local       # 只监听本机
+./alvus.exe -network-only # 监听局域网
+```
+
+### 检查
+
+浏览器打开 `http://localhost:4000/dashboard` 或 `http://localhost:4000/health`。
 
 ---
 
-### 3. Run
+## 管理模式（本 fork 新增）
 
-```bash
-./alvus
-```
-
-You can also use command-line flags to control server access:
-
-- `--local`: Binds to `127.0.0.1` (only accessible from the device it's running on).
-- `--network-only`: Binds to `0.0.0.0` (accessible via LAN — perfect for home servers).
-
-```bash
-# Example for a home server
-./alvus --network-only
-```
+### 什么是管理模式
 
 ```
-⚡ Alvus 0.0.0.0:3000 → https://integrate.api.nvidia.com/v1
-   Keys    : 3 loaded
-   Cooldown: 60s per key on 429/502/503
+你执行:
+  ./alvus.exe --manage manage.json
+
+发生了什么:
+  ┌─ alvus.exe (管理器) ─────────────────────┐
+  │                                           │
+  │  ├─ 启动子进程: NVIDIA (端口 4000)        │
+  │  │   └─ 读取 proxies/nvidia/.env          │
+  │  │   └─ key 轮换 → 上游 NVIDIA NIM       │
+  │  │                                         │
+  │  ├─ 启动子进程: OpenAI (端口 4001)        │
+  │  │   └─ 读取 proxies/openai/.env          │
+  │  │   └─ key 轮换 → 上游 OpenAI API        │
+  │  │                                         │
+  │  └─ 每个子进程独立互不干扰                 │
+  │                                             │
+  │  挂了自动重启 ✓  Ctrl+C 全关 ✓            │
+  └─────────────────────────────────────────────┘
 ```
 
----
+每个子进程都是一个独立的 `alvus.exe`，有自己的 `.env`、自己的端口、自己的 key 池。一个崩了不影响其他。
 
-### 4. Point your agent at it
+### 准备 manage.json
 
-#### OpenClaw
+在 `alvus.exe` 同目录下创建 `manage.json`：
 
 ```json
 {
-  "models": {
-    "providers": {
-      "nim": {
-        "baseUrl": "http://localhost:3000/v1",
-        "apiKey": "sk-proxy-dummy"
-      }
-    },
-    "defaults": {
-      "provider": "nim",
-      "model": "deepseek-ai/deepseek-r1"
-    }
-  }
-}
-```
-
-#### PicoClaw / Nanobot
-
-```json
-{
-  "model_name": "deepseek-r1",
-  "model": "openai/deepseek-ai/deepseek-r1",
-  "api_base": "http://localhost:3000/v1",
-  "api_keys": ["sk-proxy-dummy"]
-}
-```
-
-#### Cline (VS Code)
-
-| Setting      | Value                           |
-| ------------ | ------------------------------- |
-| API Provider | `OpenAI Compatible`             |
-| Base URL     | `http://localhost:3000/v1`      |
-| API Key      | `sk-proxy-dummy` _(any string)_ |
-| Model ID     | `deepseek-ai/deepseek-r1`       |
-
-#### Cursor
-
-Settings → Models → set base URL to `http://localhost:3000/v1`, any dummy key.
-
-#### Aider
-
-```bash
-aider --openai-api-base http://localhost:3000/v1 --openai-api-key sk-dummy
-```
-
----
-
-## How It Works
-
-```
-1. Request arrives from your agent or IDE
-2. Body is buffered (needed for retry replay)
-3. Round-robin picks the next available key
-4. Request forwarded upstream with that key injected
-   │
-   ├── ✅ 2xx/3xx → request count incremented, headers + body streamed back, done
-   ├── ❄️ 429/502/503 → key enters cooldown, retry with next key
-   ├── 🔑 401/403 → key permanently removed from pool
-   └── ⚠️ other 4xx/5xx → passed through as-is
-```
-
-Your agent sees a clean stream or a final error. Never a 429.
-
----
-
-## Key Status
-
-```bash
-curl http://localhost:3000/health
-```
-
-```json
-{
-  "status": "ok",
-  "keys": 3,
-  "details": [
+  "providers": [
     {
-      "index": 0,
-      "key": "nvapi-xxxxxxxxxxxx",
-      "status": "ready",
-      "requests_per_minute": 15,
-      "last_used": "2023-11-15T14:30:00Z",
-      "cooldown_until": "2023-11-15T14:29:00Z"
+      "name": "nvidia",
+      "dir": "proxies/nvidia",
+      "port": 4000
     },
     {
-      "index": 1,
-      "key": "nvapi-yyyyyyyyyyyy",
-      "status": "cooling(42s)",
-      "requests_per_minute": 40,
-      "last_used": "2023-11-15T14:31:00Z",
-      "cooldown_until": "2023-11-15T14:32:00Z"
+      "name": "openai",
+      "dir": "proxies/openai",
+      "port": 4001,
+      "disabled": true
     }
   ]
 }
 ```
 
----
+字段说明：
 
-## Other Providers
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `name` | ✅ | 供应商名称，用于日志标识 |
+| `dir` | ✅ | 子进程的工作目录（包含 `.env`） |
+| `port` | ✅ | 该实例监听的端口 |
+| `disabled` | ❌ | `true` 时跳过此实例 |
 
-`TARGET_BASE_URL` is all you need to change:
+> `dir` 是相对于 `manage.json` 所在目录的路径。
 
-```env
-# OpenRouter
-TARGET_BASE_URL=https://openrouter.ai/api/v1
-
-# Together AI
-TARGET_BASE_URL=https://api.together.xyz/v1
-
-# Groq
-TARGET_BASE_URL=https://api.groq.com/openai/v1
-
-# Any other OpenAI-compatible endpoint
-TARGET_BASE_URL=https://your-provider.com/v1
-```
-
----
-
-## Running as a Service (systemd)
-
-```ini
-[Unit]
-Description=Alvus
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/alvus
-WorkingDirectory=/etc/alvus
-Restart=on-failure
-RestartSec=5
-# Graceful shutdown on stop/restart
-KillSignal=SIGTERM
-TimeoutStopSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Put your `.env` in `/etc/alvus/`. Reload and start:
+### 启动管理模式
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now alvus
+./alvus.exe --manage manage.json
 ```
 
-Alvus handles `SIGINT` and `SIGTERM` gracefully, allowing in-flight requests to complete before shutting down (with a 5-second timeout).
+你会看到：
+
+```
+✅ [nvidia] started (PID 12345, port 4000, dir: .../proxies/nvidia)
+✅ [openai] started (PID 12346, port 4001, dir: .../proxies/openai)
+🚀 Manager: 2/2 instances started
+```
+
+### 停止
+
+按 `Ctrl+C`，管理器会：
+1. 发送停止信号给所有子进程
+2. 等待子进程退出
+3. 自己退出
+
+### 自动重启
+
+如果某个子进程意外崩溃了，管理器每 3 秒检查一次，自动拉起来。
 
 ---
 
-## FAQ
+## 如何新增一个供应商
 
-**Do I need Go installed to run this?**
-No. Download a prebuilt binary from [Releases](../../releases).
+### 步骤
 
-**Are my keys safe?**
-Keys live in `.env` on your machine and are only ever sent to the upstream provider. Alvus logs key indices, never key values.
+举个例子：你要加一个 DeepSeek 供应商。
 
-**What if ALL keys are cooling?**
-Alvus waits for the soonest key to become available and retries, up to 10 times. If everything stays exhausted, it returns `503`. In practice, with 3 keys and a 60s window this is very hard to trigger.
+**1. 创建目录和 `.env`**
 
-**Can I reload keys without restarting?**
-Yes! Alvus now supports hot-reloading when the `.env` file changes. Simply edit your `.env` file and Alvus will automatically detect the changes and reload the configuration within 1 second. No restart needed.
+```
+proxies/
+├── nvidia/
+│   └── .env
+├── openai/
+│   └── .env
+└── deepseek/          ← 新建
+    └── .env           ← 新建
+```
 
-**Does it work on a Raspberry Pi Zero / 32-bit hardware?**
-Yes. Prebuilt binaries include `linux/arm` and `linux/386`. The binary is fully static — no runtime needed.
+**2. 编写 `.env`**
 
-**How much memory does it use?**
-Around 2 MB at idle. It's a single static Go binary with no runtime overhead — you won't notice it sitting next to a running model.
+```env
+PORT=4002
+TARGET_BASE_URL=https://api.deepseek.com/v1
+API_KEYS=sk-deepseek-key-1,sk-deepseek-key-2
+COOLDOWN_SEC=60
+```
+
+> ⚠️ 每个供应商的 `PORT` 必须不同，不能冲突。
+
+**3. 在 manage.json 加一行**
+
+```json
+{
+  "providers": [
+    { "name": "nvidia",  "dir": "proxies/nvidia",  "port": 4000 },
+    { "name": "openai",  "dir": "proxies/openai",  "port": 4001 },
+    { "name": "deepseek", "dir": "proxies/deepseek", "port": 4002 }
+  ]
+}
+```
+
+**4. 重启管理器**
+
+按 `Ctrl+C` 关掉，重新 `./alvus.exe --manage manage.json`。
+
+搞定。
 
 ---
 
-## Roadmap
+## 常见场景
 
-- [x] Hot-reload when .env changes (no restart needed)
-- [x] Per-key request counters and detailed status in `/health`
-- [x] Web dashboard (opt-in, zero-dep binary stays the same)
+### 我只想跑 NVIDIA
+
+```json
+{
+  "providers": [
+    { "name": "nvidia", "dir": "proxies/nvidia", "port": 4000 }
+  ]
+}
+```
+
+或者直接用单实例模式，不用 manage.json。
+
+### 我想暂时关掉某个供应商，不删配置
+
+加 `"disabled": true`：
+
+```json
+{ "name": "openai", "dir": "proxies/openai", "port": 4001, "disabled": true }
+```
+
+下次启动时会跳过它。
+
+### 我不想每次手动重启管理器
+
+用 `start-all.ps1`（已配好）：
+
+```powershell
+.\start-all.ps1
+```
+
+它会为每个供应商弹一个独立窗口。
 
 ---
 
-## Contributing
+## 目录结构说明
 
-PRs welcome. This project lives in **a single file** with **zero external dependencies** — keep it that way. If a feature needs an import beyond stdlib, it doesn't belong in `main.go`. Open an issue first and we'll figure out the right shape for it.
+```
+alvus-fork/
+├── src/
+│   ├── main.go               # 单实例逻辑（跟原版一样）
+│   ├── manage.go              # 管理模式（本 fork 新增）
+│   ├── go.mod                 # module 声明，零依赖
+│   ├── manage.json            # 管理模式配置文件
+│   └── regression_test.ps1    # 回归测试脚本（22 个用例）
+│
+├── proxies/                   # 你的供应商目录（按需创建）
+│   ├── nvidia/
+│   │   └── .env
+│   └── openai/
+│       └── .env
+│
+├── start-nvidia.ps1           # 单独启动 NVIDIA
+├── start-openai.ps1           # 单独启动 OpenAI
+├── start-all.ps1              # 一键启动所有
+└── start-provider-template.ps1 # 新供应商启动脚本模板
+```
 
 ---
 
-## License
+## 回归测试
 
-MIT.
+不需要 API key，在本地就能跑：
+
+```powershell
+.\regression_test.ps1
+```
+
+测试内容：
+- 单实例模式：启动、健康检查、配置读写、Dashboard、Key 掩码、日志清空
+- 管理模式：多实例启动、非法配置处理
+- 进程管理：自动重启、停止传播
 
 ---
 
-_Built at 2am when an OpenClaw task hit its fifth 429 in a row._
+> 有问题开 Issue，或者直接找我。
