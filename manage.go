@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -45,15 +46,32 @@ func (m *ManagedInstance) Start(binary string) error {
 	if err != nil {
 		return fmt.Errorf("bad dir %q: %v", m.Dir, err)
 	}
+	// Verify .env exists
+	if _, err := os.Stat(filepath.Join(absDir, ".env")); os.IsNotExist(err) {
+		log.Printf("⚠️ [%s] no .env in %s", m.Name, absDir)
+	}
 	cmd := exec.Command(binary, "-local")
 	cmd.Dir = absDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Capture stderr for diagnostics
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("stderr pipe: %v", err)
+	}
+	cmd.Stdout = nil
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %q: %v", m.Name, err)
 	}
 	m.Cmd = cmd
 	m.Running = true
+
+	// Read child's stderr and log it
+	go func() {
+		stderr, _ := io.ReadAll(stderrPipe)
+		if len(stderr) > 0 {
+			log.Printf("⚠️ [%s] stderr: %s", m.Name, string(stderr))
+		}
+	}()
 
 	go func() {
 		cmd.Wait()
