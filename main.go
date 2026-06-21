@@ -1226,8 +1226,26 @@ func watchEnvFile(state *ServerState, stop <-chan struct{}) {
 func main() {
 	isLocal := flag.Bool("local", false, "Bind to 127.0.0.1 (local access only)")
 	isNetwork := flag.Bool("network-only", false, "Bind to 0.0.0.0 (accessible via LAN)")
+	managePath := flag.String("manage", "", "Path to manage.json for multi-instance mode")
 	flag.Parse()
 
+	// Shared stop channel for graceful shutdown
+	stop := make(chan struct{})
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Printf("🛑 Shutting down gracefully...")
+		close(stop)
+	}()
+
+	// ── Manage Mode ────────────────────────────
+	if *managePath != "" {
+		runManager(*managePath, stop)
+		return
+	}
+
+	// ── Single Instance Mode (original) ────────
 	host := "" // Default (binds to all interfaces)
 	if *isLocal {
 		host = "127.0.0.1"
@@ -1239,19 +1257,12 @@ func main() {
 	cfg, pool := loadConfig()
 	state := newServerState(cfg, pool)
 
-	stop := make(chan struct{})
 	go watchEnvFile(state, stop)
-
-	// Graceful shutdown on SIGINT/SIGTERM
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 	server := &http.Server{Addr: host + ":" + cfg.Port, Handler: state.mux}
 
 	go func() {
 		<-sigCh
-		log.Printf("🛑 Shutting down gracefully...")
-		close(stop)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
