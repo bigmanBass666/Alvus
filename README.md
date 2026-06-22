@@ -9,10 +9,10 @@
 ## 快速上手
 
 ```bash
-# 编译（需要 Go 1.21+）
-cd src && go build -o alvus.exe .
+# 编译（需要 Go 1.22+）
+go build -o alvus.exe .
 
-# 双击启动单实例（跟原来一样）
+# 直接运行（已预编译，跳到下一步）
 ./alvus.exe -local
 
 # 管理模式启动多供应商
