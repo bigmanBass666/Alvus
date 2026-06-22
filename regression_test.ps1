@@ -353,28 +353,13 @@ function Test-ManageMode {
     $port1 = Get-FreePort
     $port2 = Get-FreePort
     $tmpDir = Join-Path $env:TEMP "alvus-test-manager-$([System.IO.Path]::GetRandomFileName())"
-    New-Item -ItemType Directory -Path "$tmpDir\providers\provider-a" -Force | Out-Null
-    New-Item -ItemType Directory -Path "$tmpDir\providers\provider-b" -Force | Out-Null
-
-    Write-Utf8File "$tmpDir\providers\provider-a\.env" @"
-PORT=$port1
-TARGET_BASE_URL=https://api-a.test.com/v1
-API_KEYS=key-a-1,key-a-2
-COOLDOWN_SEC=5
-"@
-
-    Write-Utf8File "$tmpDir\providers\provider-b\.env" @"
-PORT=$port2
-TARGET_BASE_URL=https://api-b.test.com/v1
-API_KEYS=key-b-1,key-b-2,key-b-3
-COOLDOWN_SEC=5
-"@
+    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
 
     $manageJson = @"
 {
   "providers": [
-    { "name": "provider-a", "dir": "providers/provider-a", "port": $port1 },
-    { "name": "provider-b", "dir": "providers/provider-b", "port": $port2 }
+    { "name": "provider-a", "target_url": "https://api-a.test.com/v1", "api_keys": ["key-a-1","key-a-2"], "port": $port1 },
+    { "name": "provider-b", "target_url": "https://api-b.test.com/v1", "api_keys": ["key-b-1","key-b-2","key-b-3"], "port": $port2 }
   ]
 }
 "@
@@ -460,15 +445,9 @@ function Test-ProcessManagement {
 
     $port = Get-FreePort
     $tmpDir = Join-Path $env:TEMP "alvus-test-procmgmt-$([System.IO.Path]::GetRandomFileName())"
-    New-Item -ItemType Directory -Path "$tmpDir\providers\demo" -Force | Out-Null
-    Write-Utf8File "$tmpDir\providers\demo\.env" @"
-PORT=$port
-TARGET_BASE_URL=https://demo.test.com/v1
-API_KEYS=demo-key-1
-COOLDOWN_SEC=5
-"@
+    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
 
-    Write-Utf8File "$tmpDir\manage.json" "{ `"providers`": [{ `"name`": `"demo`", `"dir`": `"providers/demo`", `"port`": $port }] }"
+    Write-Utf8File "$tmpDir\manage.json" "{ `"providers`": [{ `"name`": `"demo`", `"target_url`": `"https://demo.test.com/v1`", `"api_keys`": [`"demo-key-1`"], `"port`": $port }] }"
 
     try {
         $mgrProc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "--manage manage.json"

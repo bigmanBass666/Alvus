@@ -6,27 +6,6 @@
 
 ---
 
-## 目录
-
-- [这是什么](#这是什么)
-- [快速上手](#快速上手)
-- [单实例模式（跟原版一样）](#单实例模式跟原版一样)
-- [管理模式（本 fork 新增）](#管理模式本-fork-新增)
-- [如何新增一个供应商](#如何新增一个供应商)
-- [常见场景](#常见场景)
-- [目录结构说明](#目录结构说明)
-- [回归测试](#回归测试)
-
----
-
-## 这是什么
-
-**Alvus** 是一个零依赖的 Go 反向代理。你给它一堆 API key，它在中间做轮换——遇到 429/502/503 自动换下一个 key，你的 AI 工具永远看不见限流错误。
-
-**本 fork** 在保留所有原功能的基础上，加了**管理模式**：一个 `alvus.exe` 同时管理多个供应商实例（比如 NVIDIA、OpenAI、DeepSeek 各跑一个，互不干扰）。
-
----
-
 ## 快速上手
 
 ```bash
@@ -51,7 +30,6 @@ cd src && go build -o alvus.exe .
 ```env
 PORT=4000
 TARGET_BASE_URL=https://integrate.api.nvidia.com/v1
-GENAI_BASE_URL=https://ai.api.nvidia.com
 API_KEYS=key1,key2,key3
 COOLDOWN_SEC=60
 ```
@@ -59,185 +37,127 @@ COOLDOWN_SEC=60
 ### 启动
 
 ```bash
-./alvus.exe -local       # 只监听本机
-./alvus.exe -network-only # 监听局域网
+./alvus.exe -local
+./alvus.exe -network-only
 ```
 
 ### 检查
 
-浏览器打开 `http://localhost:4000/dashboard` 或 `http://localhost:4000/health`。
+浏览器打开 `http://localhost:4000/dashboard`。
 
 ---
 
 ## 管理模式（本 fork 新增）
 
-### 什么是管理模式
+### 原理
 
 ```
 你执行:
   ./alvus.exe --manage manage.json
 
 发生了什么:
-  ┌─ alvus.exe (管理器) ─────────────────────┐
-  │                                           │
-  │  ├─ 启动子进程: NVIDIA (端口 4000)        │
-  │  │   └─ 读取 proxies/nvidia/.env          │
-  │  │   └─ key 轮换 → 上游 NVIDIA NIM       │
-  │  │                                         │
-  │  ├─ 启动子进程: OpenAI (端口 4001)        │
-  │  │   └─ 读取 proxies/openai/.env          │
-  │  │   └─ key 轮换 → 上游 OpenAI API        │
-  │  │                                         │
-  │  └─ 每个子进程独立互不干扰                 │
-  │                                             │
-  │  挂了自动重启 ✓  Ctrl+C 全关 ✓            │
-  └─────────────────────────────────────────────┘
+  ┌─ alvus.exe (管理器) ────────────────────────┐
+  │                                              │
+  │  ├─ 启动子进程: NVIDIA (端口 4000)           │
+  │  │   └─ 自动创建工作目录 + .env              │
+  │  │   └─ key 轮换 → 上游 API                 │
+  │  │                                            │
+  │  ├─ 启动子进程: SenseNova (端口 4002)        │
+  │  │   └─ 自动创建工作目录 + .env              │
+  │  │   └─ key 轮换 → 上游 API                 │
+  │  │                                            │
+  │  └─ 每个子进程独立互不干扰                    │
+  │                                                │
+  │  挂了自动重启 ✓  Ctrl+C 全关 ✓               │
+  └────────────────────────────────────────────────┘
 ```
 
-每个子进程都是一个独立的 `alvus.exe`，有自己的 `.env`、自己的端口、自己的 key 池。一个崩了不影响其他。
+**所有配置只写 `manage.json` 一个文件**，不需要建文件夹，不需要写 `.env`。
 
-### 准备 manage.json
-
-在 `alvus.exe` 同目录下创建 `manage.json`：
+### 配置 manage.json
 
 ```json
 {
   "providers": [
     {
       "name": "nvidia",
-      "dir": "proxies/nvidia",
+      "target_url": "https://integrate.api.nvidia.com/v1",
+      "genai_url": "https://ai.api.nvidia.com",
+      "api_keys": ["nvapi-key1", "nvapi-key2"],
       "port": 4000
     },
     {
-      "name": "openai",
-      "dir": "proxies/openai",
-      "port": 4001,
-      "disabled": true
+      "name": "sensenova",
+      "target_url": "https://token.sensenova.cn/v1",
+      "api_keys": ["sk-key1"],
+      "port": 4002
     }
   ]
 }
 ```
 
-字段说明：
-
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `name` | ✅ | 供应商名称，用于日志标识 |
-| `dir` | ✅ | 子进程的工作目录（包含 `.env`） |
-| `port` | ✅ | 该实例监听的端口 |
-| `disabled` | ❌ | `true` 时跳过此实例 |
+| `name` | ✅ | 供应商名称 |
+| `target_url` | ✅ | 上游 API 地址 |
+| `genai_url` | ❌ | NVIDIA GenAI 专用地址 |
+| `api_keys` | ✅ | API key 列表，至少一个 |
+| `port` | ❌ | 监听端口，不填自动分配（从 4000 开始） |
+| `disabled` | ❌ | `true` 时跳过此供应商 |
 
-> `dir` 是相对于 `manage.json` 所在目录的路径。
-
-### 启动管理模式
+### 启动
 
 ```bash
 ./alvus.exe --manage manage.json
 ```
 
-你会看到：
-
-```
-✅ [nvidia] started (PID 12345, port 4000, dir: .../proxies/nvidia)
-✅ [openai] started (PID 12346, port 4001, dir: .../proxies/openai)
-🚀 Manager: 2/2 instances started
-```
-
 ### 停止
 
-按 `Ctrl+C`，管理器会：
-1. 发送停止信号给所有子进程
-2. 等待子进程退出
-3. 自己退出
+按 `Ctrl+C`，管理器会关掉所有子进程，自动清理临时文件。
 
 ### 自动重启
 
-如果某个子进程意外崩溃了，管理器每 3 秒检查一次，自动拉起来。
+子进程意外挂了，管理器每 3 秒检查一次，自动拉起来。
 
 ---
 
 ## 如何新增一个供应商
 
-### 步骤
+**只需要一步：在 manage.json 加一段花括号。**
 
-举个例子：你要加一个 DeepSeek 供应商。
-
-**1. 创建目录和 `.env`**
-
-```
-proxies/
-├── nvidia/
-│   └── .env
-├── openai/
-│   └── .env
-└── deepseek/          ← 新建
-    └── .env           ← 新建
-```
-
-**2. 编写 `.env`**
-
-```env
-PORT=4002
-TARGET_BASE_URL=https://api.deepseek.com/v1
-API_KEYS=sk-deepseek-key-1,sk-deepseek-key-2
-COOLDOWN_SEC=60
-```
-
-> ⚠️ 每个供应商的 `PORT` 必须不同，不能冲突。
-
-**3. 在 manage.json 加一行**
+加一个 DeepSeek 的示例：
 
 ```json
 {
   "providers": [
-    { "name": "nvidia",  "dir": "proxies/nvidia",  "port": 4000 },
-    { "name": "openai",  "dir": "proxies/openai",  "port": 4001 },
-    { "name": "deepseek", "dir": "proxies/deepseek", "port": 4002 }
+    { "name": "nvidia",   "target_url": "https://integrate.api.nvidia.com/v1",   "api_keys": ["key1"], "port": 4000 },
+    { "name": "sensenova", "target_url": "https://token.sensenova.cn/v1",        "api_keys": ["sk-1"],  "port": 4002 },
+    { "name": "deepseek",  "target_url": "https://api.deepseek.com/v1",          "api_keys": ["sk-d1"], "port": 4003 }
   ]
 }
 ```
 
-**4. 重启管理器**
-
-按 `Ctrl+C` 关掉，重新 `./alvus.exe --manage manage.json`。
-
-搞定。
+然后重启管理器就行。**不需要建文件夹，不需要写 .env 文件，端口可以自动分配。**
 
 ---
 
 ## 常见场景
 
-### 我只想跑 NVIDIA
+### 端口不填会怎样
+
+自动分配：第一个 4000，第二个 4001，以此类推。
+
+### 想暂时关掉某个供应商
 
 ```json
-{
-  "providers": [
-    { "name": "nvidia", "dir": "proxies/nvidia", "port": 4000 }
-  ]
-}
+{ "name": "openai", "target_url": "...", "api_keys": [...], "port": 4001, "disabled": true }
 ```
 
-或者直接用单实例模式，不用 manage.json。
+加 `"disabled": true`，下次启动会跳过。
 
-### 我想暂时关掉某个供应商，不删配置
+### manage.json 安全吗
 
-加 `"disabled": true`：
-
-```json
-{ "name": "openai", "dir": "proxies/openai", "port": 4001, "disabled": true }
-```
-
-下次启动时会跳过它。
-
-### 我不想每次手动重启管理器
-
-用 `start-all.ps1`（已配好）：
-
-```powershell
-.\start-all.ps1
-```
-
-它会为每个供应商弹一个独立窗口。
+`manage.json` 已加入 `.gitignore`，不会误提交到 git。
 
 ---
 
@@ -245,23 +165,15 @@ COOLDOWN_SEC=60
 
 ```
 alvus-fork/
-├── src/
-│   ├── main.go               # 单实例逻辑（跟原版一样）
-│   ├── manage.go              # 管理模式（本 fork 新增）
-│   ├── go.mod                 # module 声明，零依赖
-│   ├── manage.json            # 管理模式配置文件
-│   └── regression_test.ps1    # 回归测试脚本（22 个用例）
-│
-├── proxies/                   # 你的供应商目录（按需创建）
-│   ├── nvidia/
-│   │   └── .env
-│   └── openai/
-│       └── .env
-│
-├── start-nvidia.ps1           # 单独启动 NVIDIA
-├── start-openai.ps1           # 单独启动 OpenAI
-├── start-all.ps1              # 一键启动所有
-└── start-provider-template.ps1 # 新供应商启动脚本模板
+├── main.go                 # 单实例逻辑（跟原版一样）
+├── manage.go               # 管理模式（本 fork 新增）
+├── alvus.exe               # 编译好的二进制
+├── go.mod
+├── README.md               # 本说明
+├── manage.json             # 你的配置（已 gitignore，不会误提交）
+├── manage.example.json     # 配置模板
+├── regression_test.ps1     # 回归测试（22 用例）
+└── manage-work/            # 自动生成，程序启动后自动创建
 ```
 
 ---
@@ -274,11 +186,8 @@ alvus-fork/
 .\regression_test.ps1
 ```
 
-测试内容：
-- 单实例模式：启动、健康检查、配置读写、Dashboard、Key 掩码、日志清空
-- 管理模式：多实例启动、非法配置处理
-- 进程管理：自动重启、停止传播
+测试内容：单实例模式（启动、健康检查、配置读写、Dashboard、Key 掩码）、管理模式（多实例启动、非法配置处理）、进程管理（自动重启、停止传播）。
 
 ---
 
-> 有问题开 Issue，或者直接找我。
+> 有问题开 Issue。
