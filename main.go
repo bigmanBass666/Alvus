@@ -26,6 +26,23 @@ func maskKey(key string) string {
 	return key[:8] + "..." + key[len(key)-4:]
 }
 
+func copyHeaders(dst, src http.Header) {
+	for k, vals := range src {
+		for _, v := range vals {
+			dst.Add(k, v)
+		}
+	}
+}
+
+func appendUsageLog(entry LogEntry) {
+	usageMu.Lock()
+	usageLogs = append(usageLogs, entry)
+	if len(usageLogs) > 1000 {
+		usageLogs = usageLogs[1:]
+	}
+	usageMu.Unlock()
+}
+
 type LogEntry struct {
 	Timestamp string `json:"timestamp"`
 	Key string `json:"key"`
@@ -486,11 +503,7 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "proxy: failed to build upstream request", http.StatusInternalServerError)
 			return
 		}
-		for k, vals := range r.Header {
-			for _, v := range vals {
-				req.Header.Add(k, v)
-			}
-		}
+		copyHeaders(req.Header, r.Header)
 		req.Header.Set("Authorization", "Bearer "+key)
 
 		resp, err := client.Do(req)
@@ -528,22 +541,12 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			for k, vals := range resp.Header {
-				for _, v := range vals {
-					w.Header().Add(k, v)
-				}
-			}
+			copyHeaders(w.Header(), resp.Header)
 			w.WriteHeader(resp.StatusCode)
 			io.Copy(w, resp.Body)
 			resp.Body.Close()
 
-			pool.IncrementRequestCount(idx)
-			usageMu.Lock()
-			usageLogs = append(usageLogs, LogEntry{Timestamp: time.Now().Format(time.RFC3339), Key: key, KeyIndex: idx + 1, Method: r.Method, URL: target, Status: resp.StatusCode, RequestBodySize: len(bodyBytes)})
-			if len(usageLogs) > 1000 {
-				usageLogs = usageLogs[1:]
-			}
-			usageMu.Unlock()
+			appendUsageLog(LogEntry{Timestamp: time.Now().Format(time.RFC3339), Key: key, KeyIndex: idx + 1, Method: r.Method, URL: target, Status: resp.StatusCode, RequestBodySize: len(bodyBytes)})
 			log.Printf("⚠️ %s %s → %d (Terminal Client Error, no retry)", r.Method, target, resp.StatusCode)
 			return
 		}
@@ -556,11 +559,7 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		for k, vals := range resp.Header {
-			for _, v := range vals {
-				w.Header().Add(k, v)
-			}
-		}
+		copyHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 
 		if f, ok := w.(http.Flusher); ok {
@@ -581,12 +580,7 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		resp.Body.Close()
 
 		pool.IncrementRequestCount(idx)
-		usageMu.Lock()
-		usageLogs = append(usageLogs, LogEntry{Timestamp: time.Now().Format(time.RFC3339), Key: key, KeyIndex: idx + 1, Method: r.Method, URL: target, Status: resp.StatusCode, RequestBodySize: len(bodyBytes)})
-		if len(usageLogs) > 1000 {
-			usageLogs = usageLogs[1:]
-		}
-		usageMu.Unlock()
+		appendUsageLog(LogEntry{Timestamp: time.Now().Format(time.RFC3339), Key: key, KeyIndex: idx + 1, Method: r.Method, URL: target, Status: resp.StatusCode, RequestBodySize: len(bodyBytes)})
 		log.Printf("✅ %s %s → %d (key[%d], attempt %d)", r.Method, target, resp.StatusCode, idx, attempt+1)
 		return
 	}
@@ -1262,7 +1256,7 @@ func main() {
 	server := &http.Server{Addr: host + ":" + cfg.Port, Handler: state.mux}
 
 	go func() {
-		<-sigCh
+		<-stop
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {

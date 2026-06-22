@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const workDirName = "manage-work"
+
 // ── Config ─────────────────────────────────────
 
 type ManageConfig struct {
@@ -41,7 +43,6 @@ type ManagedInstance struct {
 
 // writeEnvFile generates and writes the .env file for a managed instance.
 func (m *ManagedInstance) writeEnvFile(cfg ProviderDef) error {
-	// Ensure work dir exists
 	if err := os.MkdirAll(m.Dir, 0755); err != nil {
 		return fmt.Errorf("create dir %q: %v", m.Dir, err)
 	}
@@ -72,11 +73,6 @@ func (m *ManagedInstance) Start(binary string) error {
 	if err != nil {
 		return fmt.Errorf("bad dir %q: %v", m.Dir, err)
 	}
-	// Ensure work dir exists
-	if err := os.MkdirAll(absDir, 0755); err != nil {
-		return fmt.Errorf("create dir %q: %v", absDir, err)
-	}
-	// Verify .env exists
 	if _, err := os.Stat(filepath.Join(absDir, ".env")); os.IsNotExist(err) {
 		return fmt.Errorf(".env not found in %s — writeEnvFile() was not called", absDir)
 	}
@@ -134,11 +130,30 @@ type Manager struct {
 	workBase  string
 }
 
-// detectOldFormat checks if the config is in the old format (has "dir" field).
-func detectOldConfigFormat(cfg *ManageConfig) bool {
-	// We can't detect "dir" from JSON unmarshal since Go discards unknown fields,
-	// but we can check the raw JSON for the "dir" key.
-	return false // handled via raw check in LoadManagerConfig
+// detectOldFormat checks if the config JSON has old-format fields (e.g. "dir").
+func detectOldFormat(data []byte) error {
+	var rawMap map[string]interface{}
+	if err := json.Unmarshal(data, &rawMap); err != nil {
+		return nil
+	}
+	rawProviders, ok := rawMap["providers"]
+	if !ok {
+		return nil
+	}
+	providers, ok := rawProviders.([]interface{})
+	if !ok {
+		return nil
+	}
+	for _, p := range providers {
+		pm, ok := p.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if _, hasDir := pm["dir"]; hasDir {
+			return fmt.Errorf("manage.json is in the old format. Check manage.example.json for the new format")
+		}
+	}
+	return nil
 }
 
 func LoadManagerConfig(path string) (ManageConfig, error) {
@@ -147,23 +162,8 @@ func LoadManagerConfig(path string) (ManageConfig, error) {
 		return ManageConfig{}, fmt.Errorf("读取 %s 失败: %v", path, err)
 	}
 
-	// Detect old format: check if JSON has "dir" field
-	var rawMap map[string]interface{}
-	if err := json.Unmarshal(data, &rawMap); err == nil {
-		if rawProviders, ok := rawMap["providers"]; ok {
-			if providers, ok := rawProviders.([]interface{}); ok {
-				for _, p := range providers {
-					if pm, ok := p.(map[string]interface{}); ok {
-						if _, hasDir := pm["dir"]; hasDir {
-							return ManageConfig{}, fmt.Errorf(
-								"❌ manage.json 是旧格式，请参考 manage.example.json 更新\n" +
-									"   改动说明：配置已合并，不再需要 dir 和 .env 文件\n" +
-									"   新格式把 target_url 和 api_keys 直接写在 manage.json 里")
-						}
-					}
-				}
-			}
-		}
+	if err := detectOldFormat(data); err != nil {
+		return ManageConfig{}, err
 	}
 
 	var cfg ManageConfig
@@ -182,15 +182,12 @@ func LoadManagerConfig(path string) (ManageConfig, error) {
 		if len(p.APIKeys) == 0 {
 			return ManageConfig{}, fmt.Errorf("providers[%d] %q: 至少需要一个 api_key", i, p.Name)
 		}
-		// Auto-assign port if not set
 		if p.Port == 0 {
 			p.Port = 4000 + i
 			cfg.Providers[i] = p
 		}
-		// Check port conflict
 		if existing, ok := usedPorts[p.Port]; ok {
-			return ManageConfig{}, fmt.Errorf(
-				"❌ 端口 %d 冲突：%q 和 %q 都用了同一个端口，请修改其中一个的 port", p.Port, existing, p.Name)
+			return ManageConfig{}, fmt.Errorf("❌ 端口 %d 冲突：%q 和 %q 都用了同一个端口", p.Port, existing, p.Name)
 		}
 		usedPorts[p.Port] = p.Name
 	}
@@ -200,10 +197,14 @@ func LoadManagerConfig(path string) (ManageConfig, error) {
 func NewManager(cfg ManageConfig) *Manager {
 	m := &Manager{
 		config:   cfg,
-		workBase: filepath.Join("manage-work"),
+		workBase: filepath.Join(workDirName),
 	}
 	for _, p := range cfg.Providers {
 		if p.Disabled {
+			continue
+		}
+		if strings.Contains(p.Name, "..") || strings.Contains(p.Name, "/") || strings.Contains(p.Name, "\\") {
+			log.Printf("Provider name %q contains invalid characters — skipping", p.Name)
 			continue
 		}
 		workDir := filepath.Join(m.workBase, p.Name)
@@ -212,7 +213,6 @@ func NewManager(cfg ManageConfig) *Manager {
 			Dir:  workDir,
 			Port: p.Port,
 		}
-		// Write .env file for this instance
 		if err := inst.writeEnvFile(p); err != nil {
 			log.Printf("❌ [%s] 创建配置失败: %v", p.Name, err)
 			continue
@@ -258,13 +258,14 @@ func (m *Manager) WatchAndRestart(stop <-chan struct{}) {
 			}
 			for _, inst := range m.instances {
 				inst.mu.Lock()
-				running := inst.Running
-				inst.mu.Unlock()
-				if !running {
+				if !inst.Running {
+					inst.mu.Unlock()
 					log.Printf("🔄 [%s] 重启中...", inst.Name)
 					if err := inst.Start(self); err != nil {
 						log.Printf("❌ [%s] 重启失败: %v", inst.Name, err)
 					}
+				} else {
+					inst.mu.Unlock()
 				}
 			}
 		}
@@ -276,7 +277,8 @@ func (m *Manager) WatchAndRestart(stop <-chan struct{}) {
 func runManager(managePath string, stop <-chan struct{}) {
 	cfg, err := LoadManagerConfig(managePath)
 	if err != nil {
-		log.Fatalf("❌ %v", err)
+		log.Printf("❌ %v", err)
+		os.Exit(1)
 	}
 
 	mgr := NewManager(cfg)
@@ -289,8 +291,7 @@ func runManager(managePath string, stop <-chan struct{}) {
 	log.Printf("🛑 管理器关闭中...")
 	mgr.StopAll()
 
-	// Clean up work directories
-	workBase := filepath.Join("manage-work")
+	workBase := filepath.Join(workDirName)
 	if fi, err := os.Stat(workBase); err == nil && fi.IsDir() {
 		if err := os.RemoveAll(workBase); err != nil {
 			log.Printf("⚠️ 清理工作目录失败: %v", err)
