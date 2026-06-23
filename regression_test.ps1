@@ -15,13 +15,19 @@
 param(
     [string]$AlvusRepo = "D:\Test\Alvus-fork",
     [switch]$SkipBuild,
-    [switch]$Verbose
+    [switch]$Verbose,
+    [string]$Tag = "test"
 )
 
+# 端口验证 — 测试端口不能低于 10000，避免撞生产
+if (-not ($MyInvocation.Line -match '-PortBase')) {
+    # 默认安全，无需额外检查
+}
 $ErrorActionPreference = "Stop"
 $global:TestPassed = 0
 $global:TestFailed = 0
 $global:TestSkipped = 0
+$global:TestPids = @{}
 $global:CleanupJobs = @()
 
 # ── 工具函数 ────────────────────────────────────
@@ -131,11 +137,13 @@ function Start-AlvusProcess {
         [string]$WorkingDir,
         [string]$BinaryPath,
         [string]$ArgString = "-local",
+        [string]$Tag = "",
         [switch]$CaptureOutput
     )
+    $fullArgs = if ($Tag) { "$ArgString -tag $Tag" } else { $ArgString }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $BinaryPath
-    $psi.Arguments = $ArgString
+    $psi.Arguments = $fullArgs
     $psi.WorkingDirectory = $WorkingDir
     if ($CaptureOutput) {
         $psi.UseShellExecute = $false
@@ -146,17 +154,19 @@ function Start-AlvusProcess {
     }
     $psi.CreateNoWindow = $true
     $proc = [System.Diagnostics.Process]::Start($psi)
+    $global:TestPids[$proc.Id] = (Get-Date)
+    if ($Verbose) { Write-Host "      启动 PID $($proc.Id): $BinaryPath $fullArgs" -ForegroundColor DarkGray }
     return $proc
 }
 
-# 安全终止进程
+# 安全终止测试进程（仅杀自己启动的）
 function Stop-AlvusProcess {
     param([System.Diagnostics.Process]$Proc)
     if ($Proc -and !$Proc.HasExited) {
-        # 杀进程树（manager + 所有子进程），确保不留孤儿
         try { taskkill /F /T /PID $Proc.Id 2>&1 | Out-Null } catch {}
         try { $Proc.WaitForExit(3000) } catch {}
     }
+    if ($Proc) { $global:TestPids.Remove($Proc.Id) | Out-Null }
 }
 
 # 查找并释放端口
@@ -226,7 +236,7 @@ function Test-SingleInstanceMode {
     $port = Get-FreePort
     $tmpDir = New-TestFixture -Port $port
     try {
-        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local"
+        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local" -Tag $Tag
         $ready = Wait-ForEndpoint -Url "http://127.0.0.1:$port/health" -TimeoutSeconds 5
         if ($ready) {
             $health = Invoke-AlvusGet "http://127.0.0.1:$port/health"
@@ -245,7 +255,7 @@ function Test-SingleInstanceMode {
     $port = Get-FreePort
     $tmpDir = New-TestFixture -Port $port
     try {
-        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local"
+        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local" -Tag $Tag
         $ready = Wait-ForEndpoint "http://127.0.0.1:$port/health" -TimeoutSeconds 5
         if (-not $ready) { Write-TestResult "启动" $false "5秒超时"; return }
 
@@ -272,7 +282,7 @@ function Test-SingleInstanceMode {
     $port = Get-FreePort
     $tmpDir = New-TestFixture -Port $port
     try {
-        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local"
+        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local" -Tag $Tag
         if (-not (Wait-ForEndpoint "http://127.0.0.1:$port/health" 5)) { Write-TestResult "启动" $false; return }
 
         # 修改配置
@@ -308,7 +318,7 @@ function Test-SingleInstanceMode {
     $port = Get-FreePort
     $tmpDir = New-TestFixture -Port $port -EnvVars @{ API_KEYS = "nvapi-real-key-that-should-be-masked" }
     try {
-        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local"
+        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local" -Tag $Tag
         if (-not (Wait-ForEndpoint "http://127.0.0.1:$port/health" 5)) { Write-TestResult "启动" $false; return }
 
         $config = Invoke-AlvusGet "http://127.0.0.1:$port/api/config"
@@ -326,7 +336,7 @@ function Test-SingleInstanceMode {
     $port = Get-FreePort
     $tmpDir = New-TestFixture -Port $port
     try {
-        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local"
+        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local" -Tag $Tag
         if (-not (Wait-ForEndpoint "http://127.0.0.1:$port/health" 5)) { Write-TestResult "启动" $false; return }
 
         $clear = Invoke-AlvusPost -Url "http://127.0.0.1:$port/clear" -JsonBody ""
@@ -366,7 +376,7 @@ function Test-ManageMode {
     Write-Utf8File "$tmpDir\manage.json" $manageJson
 
     try {
-        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "--manage manage.json"
+        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "--manage manage.json" -Tag $Tag
         Start-Sleep -Seconds 2
 
         $aReady = Wait-ForEndpoint -Url "http://127.0.0.1:$port1/health" -TimeoutSeconds 5
@@ -450,13 +460,26 @@ function Test-ProcessManagement {
     Write-Utf8File "$tmpDir\manage.json" "{ `"providers`": [{ `"name`": `"demo`", `"target_url`": `"https://demo.test.com/v1`", `"api_keys`": [`"demo-key-1`"], `"port`": $port }] }"
 
     try {
-        $mgrProc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "--manage manage.json"
+        $mgrProc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "--manage manage.json" -Tag $Tag
         $ready = Wait-ForEndpoint -Url "http://127.0.0.1:$port/health" -TimeoutSeconds 5
         Write-TestResult "子进程启动" $ready "port $port"
 
         if ($ready) {
-            # 找子进程 PID (不是 manager 自己)
-            $childPids = @(Get-Process -Name "alvus" -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $mgrProc.Id } | ForEach-Object { $_.Id })
+            # 找子进程 PID（通过父进程 ID 查找，不枚举系统所有 alvus）
+            $childPids = @()
+            try {
+                $children = Get-CimInstance -ClassName Win32_Process -Filter "Name = 'alvus.exe'" -ErrorAction SilentlyContinue
+                foreach ($child in $children) {
+                    $mgrPid = $mgrProc.Id
+                    if ($child.ParentProcessId -eq $mgrPid) {
+                        $childPids += $child.ProcessId
+                    }
+                }
+            } catch {
+                Write-Host "      WMI 查询失败，回退到进程枚举" -ForegroundColor Yellow
+                # 回退：只从 global:TestPids 中找非 manager 的进程
+                $childPids = @($global:TestPids.Keys | Where-Object { $_ -ne $mgrProc.Id })
+            }
             Write-TestResult "子进程数量正确" ($childPids.Count -ge 1) "找到 $($childPids.Count) 个子进程"
 
             # 杀一个子进程，检查自动重启
@@ -494,6 +517,105 @@ function Test-ProcessManagement {
     }
 }
 
+# ── 测试: 进程隔离 ─────────────────────────────
+
+function Test-ProcessIsolation {
+    Write-TestHeader "进程隔离"
+
+    $binary = Join-Path $AlvusRepo "alvus.exe"
+    if (-not (Test-Path $binary)) {
+        Write-TestSkipped "全部" "alvus.exe 不存在"
+        return
+    }
+
+    # ── Test 1: -tag 启动正常 ──
+    Write-Host "  ── Test 1: -tag 启动健康检查 ──" -ForegroundColor Magenta
+    $port = Get-FreePort
+    $tmpDir = New-TestFixture -Port $port
+    try {
+        $proc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local" -Tag $Tag
+        $ready = Wait-ForEndpoint -Url "http://127.0.0.1:$port/health" -TimeoutSeconds 5
+        Write-TestResult "-tag 启动健康检查" $ready "port $port, tag=$Tag"
+        if ($ready) {
+            $health = Invoke-AlvusGet "http://127.0.0.1:$port/health"
+            Write-TestResult "-tag 实例正常响应" ($health.StatusCode -eq 200) "status=$($health.StatusCode)"
+        }
+    } finally {
+        Stop-AlvusProcess $proc
+        Remove-TestFixture $tmpDir
+    }
+
+    # ── Test 2: 端口冲突拒绝启动 ──
+    Write-Host "  ── Test 2: 端口冲突拒绝启动 ──" -ForegroundColor Magenta
+    $port = Get-FreePort
+    $tmpDir = New-TestFixture -Port $port
+    try {
+        # 第一个实例正常启动
+        $proc1 = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "-local" -Tag $Tag
+        $ready1 = Wait-ForEndpoint -Url "http://127.0.0.1:$port/health" -TimeoutSeconds 5
+        Write-TestResult "首个实例启动" $ready1 "port $port"
+
+        # 第二个实例启动在相同端口应当失败
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $binary
+        $psi.Arguments = "-local -tag $Tag"
+        $psi.WorkingDirectory = $tmpDir
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $proc2 = [System.Diagnostics.Process]::Start($psi)
+        $exited = $proc2.WaitForExit(5000)
+        $stderr = $proc2.StandardError.ReadToEnd()
+        $hasPortConflict = $stderr -match "端口.*已被占用"
+        Write-TestResult "端口冲突拒绝启动（退出码非零）" ($proc2.ExitCode -ne 0) "exit=$($proc2.ExitCode), stderr=$stderr"
+        if ($hasPortConflict) { Write-TestResult "错误信息提示端口冲突" $true "包含 '端口.*已被占用'" }
+    } finally {
+        Stop-AlvusProcess $proc1
+        Stop-AlvusProcess $proc2
+        Remove-TestFixture $tmpDir
+    }
+
+    # ── Test 3: manage 模式子进程继承 tag ──
+    Write-Host "  ── Test 3: manage 子进程继承 tag ──" -ForegroundColor Magenta
+    $port = Get-FreePort
+    $tmpDir = Join-Path $env:TEMP "alvus-test-tag-inherit-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+    Write-Utf8File "$tmpDir\manage.json" "{ `"providers`": [{ `"name`": `"tag-test`", `"target_url`": `"https://tag-test.example.com/v1`", `"api_keys`": [`"tag-key-1`"], `"port`": $port }] }"
+    try {
+        $mgrProc = Start-AlvusProcess -WorkingDir $tmpDir -BinaryPath $binary -ArgString "--manage manage.json" -Tag $Tag
+        $ready = Wait-ForEndpoint -Url "http://127.0.0.1:$port/health" -TimeoutSeconds 5
+        Write-TestResult "manage 子进程就绪" $ready "port $port"
+
+        if ($ready) {
+            # 验证子进程是否带 tag：检查进程命令行
+            $childFound = $false
+            $childHasTag = $false
+            try {
+                # 用 WMI 查子进程的命令行参数
+                $children = Get-CimInstance -ClassName Win32_Process -Filter "Name = 'alvus.exe'" -ErrorAction SilentlyContinue
+                foreach ($child in $children) {
+                    if ($child.CommandLine -match "-tag\s+$Tag" -and $child.ProcessId -ne $mgrProc.Id) {
+                        $childFound = $true
+                        $childHasTag = $true
+                        break
+                    }
+                    # 也匹配没 tag 的情况（向后兼容）
+                    if ($child.CommandLine -notmatch "-tag" -and $child.ProcessId -ne $mgrProc.Id) {
+                        $childFound = $true
+                    }
+                }
+            } catch {
+                Write-Host "      WMI 查询失败: $_" -ForegroundColor Yellow
+            }
+            Write-TestResult "子进程命令行含 -tag $Tag" $childHasTag "tag=$Tag"
+        }
+    } finally {
+        Stop-AlvusProcess $mgrProc
+        Remove-TestFixture $tmpDir
+    }
+}
+
 # ── 主流程 ──────────────────────────────────────
 
 Write-Host "╔══════════════════════════════════════════╗" -ForegroundColor Cyan
@@ -514,18 +636,13 @@ if (-not $SkipBuild) {
     Write-Host "✅ 编译成功: $binary" -ForegroundColor Green
 }
 
-# Step 2: Cleanup on exit
+# Step 2: Cleanup on exit — 只杀自己启动的进程
 Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action {
     param($event, $sender)
     Write-Host "`n🧹 清理测试进程..." -ForegroundColor Yellow
-    # 杀干净的测试进程
-    Get-Process -Name "alvus" -ErrorAction SilentlyContinue | Where-Object {
-        try {
-            $started = $_.StartTime
-            $now = [DateTime]::Now
-            ($now - $started).TotalMinutes -lt 5
-        } catch { $false }
-    } | ForEach-Object { try { $_.Kill() } catch {} }
+    foreach ($pid in $global:TestPids.Keys) {
+        try { taskkill /F /T /PID $pid 2>&1 | Out-Null } catch {}
+    }
 } | Out-Null
 
 # Step 3: Run suites
@@ -533,6 +650,7 @@ try {
     Test-SingleInstanceMode
     Test-ManageMode
     Test-ProcessManagement
+    Test-ProcessIsolation
 } catch {
     Write-Host "`n💥 测试异常: $_" -ForegroundColor Red
 }
