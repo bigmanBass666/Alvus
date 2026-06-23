@@ -10,3 +10,13 @@ manage.json
 # Provider directories (each user creates their own)
 proxies/
 
+# Runtime logs
+logs/
+
+# Backup files
+*.exe~
+
+# IDE / project config
+.omc/
+.playwright-mcp/
+
