@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -804,6 +805,7 @@ func main() {
 	isLocal := flag.Bool("local", false, "Bind to 127.0.0.1 (local access only)")
 	isNetwork := flag.Bool("network-only", false, "Bind to 0.0.0.0 (accessible via LAN)")
 	managePath := flag.String("manage", "", "Path to manage.json for multi-instance mode")
+	processTag := flag.String("tag", "", "Process identity tag (empty = production)")
 	flag.Parse()
 
 	// Shared stop channel for graceful shutdown
@@ -818,7 +820,7 @@ func main() {
 
 	// ── Manage Mode ────────────────────────────
 	if *managePath != "" {
-		runManager(*managePath, stop)
+		runManager(*managePath, *processTag, stop)
 		return
 	}
 
@@ -836,7 +838,15 @@ func main() {
 
 	go watchEnvFile(state, stop)
 
-	server := &http.Server{Addr: host + ":" + cfg.Port, Handler: state.mux}
+	addr := host + ":" + cfg.Port
+
+	// Check port availability and bind
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("❌ 端口 %s 已被占用: %v", cfg.Port, err)
+	}
+
+	server := &http.Server{Handler: state.mux}
 
 	go func() {
 		<-stop
@@ -847,12 +857,17 @@ func main() {
 		}
 	}()
 
+
 	displayHost := host
 	if displayHost == "" {
 		displayHost = "0.0.0.0"
 	}
-	log.Printf("⚡ Alvus %s:%s → %s | genai → %s (%d keys)", displayHost, cfg.Port, cfg.TargetBase, cfg.GenaiBase, len(pool.keys))
-	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+	tagSuffix := ""
+	if *processTag != "" {
+		tagSuffix = fmt.Sprintf(" [tag=%s]", *processTag)
+	}
+	log.Printf("⚡ Alvus%s %s:%s → %s | genai → %s (%d keys)", tagSuffix, displayHost, cfg.Port, cfg.TargetBase, cfg.GenaiBase, len(pool.keys))
+	if err := server.Serve(listener); err != http.ErrServerClosed {
 		log.Fatalf("❌ Server error: %v", err)
 	}
 }

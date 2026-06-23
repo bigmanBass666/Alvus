@@ -83,7 +83,7 @@ func (m *ManagedInstance) writeEnvFile(cfg ProviderDef) error {
 	return nil
 }
 
-func (m *ManagedInstance) Start(binary string) error {
+func (m *ManagedInstance) Start(binary string, tag string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.Running {
@@ -96,7 +96,11 @@ func (m *ManagedInstance) Start(binary string) error {
 	if _, err := os.Stat(filepath.Join(absDir, ".env")); os.IsNotExist(err) {
 		return fmt.Errorf(".env not found in %s — writeEnvFile() was not called", absDir)
 	}
-	cmd := exec.Command(binary, "-local")
+	args := []string{"-local"}
+	if tag != "" {
+		args = append(args, "-tag", tag)
+	}
+	cmd := exec.Command(binary, args...)
 	cmd.Dir = absDir
 
 	// Capture both stdout and stderr in real-time
@@ -177,6 +181,7 @@ type Manager struct {
 	instances       []*ManagedInstance
 	config          ManageConfig
 	workBase        string
+	tag             string
 	healthFailures  map[string]int // name -> consecutive failure count
 }
 
@@ -244,10 +249,11 @@ func LoadManagerConfig(path string) (ManageConfig, error) {
 	return cfg, nil
 }
 
-func NewManager(cfg ManageConfig) *Manager {
+func NewManager(cfg ManageConfig, tag string) *Manager {
 	m := &Manager{
 		config:         cfg,
 		workBase:       filepath.Join(workDirName),
+		tag:            tag,
 		healthFailures: make(map[string]int),
 	}
 	for _, p := range cfg.Providers {
@@ -280,7 +286,7 @@ func (m *Manager) StartAll() int {
 		self = "alvus.exe"
 	}
 	for _, inst := range m.instances {
-		if err := inst.Start(self); err != nil {
+		if err := inst.Start(self, m.tag); err != nil {
 			log.Printf("❌ [%s] 启动失败: %v", inst.Name, err)
 		} else {
 			count++
@@ -314,7 +320,7 @@ func (m *Manager) WatchAndRestart(stop <-chan struct{}) {
 					m.healthFailures[inst.Name] = 0
 					inst.mu.Unlock()
 					log.Printf("🔄 [%s] 重启中...", inst.Name)
-					if err := inst.Start(self); err != nil {
+					if err := inst.Start(self, m.tag); err != nil {
 						log.Printf("❌ [%s] 重启失败: %v", inst.Name, err)
 					}
 				} else {
@@ -359,7 +365,7 @@ func openLogFile() (*os.File, error) {
 
 // ── RunMode: Manager ──────────────────────────
 
-func runManager(managePath string, stop <-chan struct{}) {
+func runManager(managePath string, tag string, stop <-chan struct{}) {
 	// Set up file logging (in addition to terminal output)
 	f, err := openLogFile()
 	if err == nil {
@@ -381,7 +387,7 @@ func runManager(managePath string, stop <-chan struct{}) {
 		os.Exit(1)
 	}
 
-	mgr := NewManager(cfg)
+	mgr := NewManager(cfg, tag)
 	n := mgr.StartAll()
 	log.Printf("🚀 已启动 %d/%d 个实例", n, len(mgr.instances))
 
