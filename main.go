@@ -402,8 +402,13 @@ func (s *ServerState) configHandler(w http.ResponseWriter, r *http.Request) {
 		payload.GenaiBase = strings.TrimSpace(payload.GenaiBase)
 
 		s.mu.RLock()
-		currentKeys := s.pool.keys
+		pool := s.pool
 		s.mu.RUnlock()
+
+		pool.mu.Lock()
+		currentKeys := make([]string, len(pool.keys))
+		copy(currentKeys, pool.keys)
+		pool.mu.Unlock()
 
 		reclaimed := make(map[int]bool)
 		for i := range payload.Keys {
