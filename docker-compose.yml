@@ -1,0 +1,14 @@
+services:
+  alvus:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      # Force container-internal port to 3000 regardless of what .env says
+      - PORT=3000
+    env_file: .env
+    volumes:
+      # Mount .env for hot-reload (fsnotify detects inotify changes inside container)
+      - ./.env:/app/.env
+    working_dir: /app
+    restart: unless-stopped
