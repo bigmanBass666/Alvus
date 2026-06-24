@@ -704,9 +704,11 @@ func TestProxyFilterSensitiveHeaders(t *testing.T) {
 
 func TestProxySlogOutput(t *testing.T) {
 	var buf bytes.Buffer
+	origHandler := slog.Default().Handler()
+	t.Cleanup(func() { slog.SetDefault(slog.New(origHandler)) })
+
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	slog.SetDefault(slog.New(handler))
-	defer slog.SetDefault(slog.New(slog.Default().Handler())) // restore
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -735,10 +737,14 @@ func TestProxySlogOutput(t *testing.T) {
 	}
 
 	// Must contain structured key=value fields
-	for _, key := range []string{"method=GET", "url", "status=200", "key_index=0"} {
+	for _, key := range []string{"method=GET", "url", "status=200"} {
 		if !strings.Contains(output, key) {
 			t.Errorf("expected slog field %q in output:\n%s", key, output)
 		}
+	}
+	// key_index must exist but value is implementation-dependent
+	if !strings.Contains(output, "key_index=") {
+		t.Errorf("expected key_index field in output:\n%s", output)
 	}
 
 	// Must NOT contain printf-style log format

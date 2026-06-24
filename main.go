@@ -644,11 +644,11 @@ func main() {
 	if displayHost == "" {
 		displayHost = "0.0.0.0"
 	}
-	tagSuffix := ""
 	if *processTag != "" {
-		tagSuffix = fmt.Sprintf(" [tag=%s]", *processTag)
+		slog.Info("starting", "tag", *processTag, "port", cfg.Port, "keys", len(pool.Keys()), "target", cfg.TargetBase, "genai", cfg.GenaiBase)
+	} else {
+		slog.Info("starting", "port", cfg.Port, "keys", len(pool.Keys()), "target", cfg.TargetBase, "genai", cfg.GenaiBase)
 	}
-	slog.Info("starting", "version", tagSuffix, "port", cfg.Port, "keys", len(pool.Keys()), "target", cfg.TargetBase, "genai", cfg.GenaiBase)
 	if err := server.Serve(listener); err != http.ErrServerClosed {
 		slog.Error("server error", "error", err)
 		log.Fatalf("❌ Server error: %v", err)

@@ -127,7 +127,7 @@ func (m *ManagedInstance) Start(binary string, tag string) error {
 			slog.Info("child stdout", "instance", m.Name, "line", scanner.Text())
 		}
 		if err := scanner.Err(); err != nil {
-			slog.Error("stdout scanner error", "instance", m.Name, "error", scanner.Err())
+			slog.Error("stdout scanner error", "instance", m.Name, "error", err)
 		}
 	}()
 
@@ -136,10 +136,10 @@ func (m *ManagedInstance) Start(binary string, tag string) error {
 		scanner := bufio.NewScanner(stderrPipe)
 		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 		for scanner.Scan() {
-			slog.Info("child stderr", "instance", m.Name, "line", scanner.Text())
+			slog.Warn("child stderr", "instance", m.Name, "line", scanner.Text())
 		}
 		if err := scanner.Err(); err != nil {
-			slog.Error("stderr scanner error", "instance", m.Name, "error", scanner.Err())
+			slog.Error("stderr scanner error", "instance", m.Name, "error", err)
 		}
 	}()
 
