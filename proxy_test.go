@@ -1,11 +1,13 @@
 package main
 
 import (
+	"alvus/internal/config"
 	"alvus/internal/keypool"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,16 +21,15 @@ import (
 
 // setupAlvus creates a mock upstream and an Alvus test server, returning both.
 // The caller must close both servers.
-func setupAlvus(t *testing.T, upstream *httptest.Server, poolKeys []string, maxRetries, cooldownSec int) *httptest.Server {
-	t.Helper()
-	cfg := Config{
-		TargetBase:  upstream.URL,
-		GenaiBase:   upstream.URL,
-		Port:        "0",
-		MaxRetries:  maxRetries,
-		CooldownSec: cooldownSec,
-		AdminToken:  "",
-	}
+func setupAlvus(tb testing.TB, upstream *httptest.Server, poolKeys []string, maxRetries, cooldownSec int) *httptest.Server {
+		tb.Helper()
+		cfg := &config.Config{
+			TargetBase:  upstream.URL,
+			GenaiBase:   upstream.URL,
+			Port:        0,
+			MaxRetries:  maxRetries,
+			CooldownSec: cooldownSec,
+		}
 	pool := keypool.NewKeyPool(poolKeys)
 	state := newServerState(cfg, pool)
 	return httptest.NewServer(state.mux)
@@ -403,13 +404,14 @@ func TestProxyWithKeyManagement(t *testing.T) {
 	defer upstream.Close()
 
 	// Create Alvus with 1 initial key (must have at least 1 to avoid panic in Next())
-	cfg := Config{
+	cfg := &config.Config{
 		TargetBase:  upstream.URL,
 		GenaiBase:   upstream.URL,
-		Port:        "0",
+		Port:        8080,
 		MaxRetries:  10,
 		CooldownSec: 60,
 		AdminToken:  "",
+		Keys:        []string{"initial-key"},
 	}
 	pool := keypool.NewKeyPool([]string{"initial-key"})
 	state := newServerState(cfg, pool)
@@ -694,5 +696,60 @@ func TestProxyFilterSensitiveHeaders(t *testing.T) {
 	}
 	if headers.Get("Accept") != "application/json" {
 		t.Errorf("Accept header was filtered out (should have passed through)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 17. Verify slog output format — proxy request produces structured JSON-like log
+// ---------------------------------------------------------------------------
+
+func TestProxySlogOutput(t *testing.T) {
+	var buf bytes.Buffer
+	origHandler := slog.Default().Handler()
+	t.Cleanup(func() { slog.SetDefault(slog.New(origHandler)) })
+
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	slog.SetDefault(slog.New(handler))
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	alvus := setupAlvus(t, upstream, []string{"test-key-a", "test-key-b"}, 10, 60)
+	defer alvus.Close()
+
+	resp, err := http.Get(alvus.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET /v1/models: %v", err)
+	}
+	resp.Body.Close()
+
+	output := buf.String()
+
+	// Log format must be slog structured (key=value, not printf-style)
+	if output == "" {
+		t.Fatal("slog output is empty — no log was written")
+	}
+
+	// Must contain INFO level
+	if !strings.Contains(output, "INFO") {
+		t.Errorf("expected slog INFO level in output, got: %s", output)
+	}
+
+	// Must contain structured key=value fields
+	for _, key := range []string{"method=GET", "url", "status=200"} {
+		if !strings.Contains(output, key) {
+			t.Errorf("expected slog field %q in output:\n%s", key, output)
+		}
+	}
+	// key_index must exist but value is implementation-dependent
+	if !strings.Contains(output, "key_index=") {
+		t.Errorf("expected key_index field in output:\n%s", output)
+	}
+
+	// Must NOT contain printf-style log format
+	if strings.Contains(output, "→ %s %s") || strings.Contains(output, "log.Printf") {
+		t.Errorf("output appears to contain old-style log.Printf format:\n%s", output)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -124,10 +124,10 @@ func (m *ManagedInstance) Start(binary string, tag string) error {
 		scanner := bufio.NewScanner(stdoutPipe)
 		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 		for scanner.Scan() {
-			log.Printf("[%s] %s", m.Name, scanner.Text())
+			slog.Info("child stdout", "instance", m.Name, "line", scanner.Text())
 		}
 		if err := scanner.Err(); err != nil {
-			log.Printf("⚠️ [%s] stdout scanner error: %v", m.Name, err)
+			slog.Error("stdout scanner error", "instance", m.Name, "error", err)
 		}
 	}()
 
@@ -136,10 +136,10 @@ func (m *ManagedInstance) Start(binary string, tag string) error {
 		scanner := bufio.NewScanner(stderrPipe)
 		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 		for scanner.Scan() {
-			log.Printf("⚠️ [%s] %s", m.Name, scanner.Text())
+			slog.Warn("child stderr", "instance", m.Name, "line", scanner.Text())
 		}
 		if err := scanner.Err(); err != nil {
-			log.Printf("⚠️ [%s] stderr scanner error: %v", m.Name, err)
+			slog.Error("stderr scanner error", "instance", m.Name, "error", err)
 		}
 	}()
 
@@ -153,13 +153,13 @@ func (m *ManagedInstance) Start(binary string, tag string) error {
 
 		code := cmd.ProcessState.ExitCode()
 		if err != nil {
-			log.Printf("❌ [%s] exited with error (PID %d, code %d): %v", m.Name, cmd.Process.Pid, code, err)
+			slog.Error("instance exited with error", "instance", m.Name, "pid", cmd.Process.Pid, "exit_code", code, "error", err)
 		} else {
-			log.Printf("⚠️ [%s] exited normally (PID %d, code %d)", m.Name, cmd.Process.Pid, code)
+			slog.Warn("instance exited", "instance", m.Name, "pid", cmd.Process.Pid, "exit_code", code)
 		}
 	}()
 
-	log.Printf("✅ [%s] started (PID %d, port %d, dir: %s)", m.Name, cmd.Process.Pid, m.Port, absDir)
+	slog.Info("instance started", "instance", m.Name, "pid", cmd.Process.Pid, "port", m.Port, "dir", absDir)
 	return nil
 }
 
@@ -170,7 +170,7 @@ func (m *ManagedInstance) Stop() {
 		return
 	}
 	pid := m.Cmd.Process.Pid
-	log.Printf("🛑 [%s] stopping (PID %d)...", m.Name, pid)
+	slog.Info("stopping instance", "instance", m.Name, "pid", pid)
 	m.Cmd.Process.Kill()
 
 	// 等待进程退出，最多 5 秒
@@ -184,7 +184,7 @@ func (m *ManagedInstance) Stop() {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		log.Printf("⚠️ [%s] 进程 %d 未在 5s 内退出", m.Name, pid)
+		slog.Warn("instance did not exit within 5s", "instance", m.Name, "pid", pid)
 	}
 	m.mu.Lock()
 	m.Running = false
@@ -196,7 +196,7 @@ func (m *ManagedInstance) Stop() {
 		// goroutine 仍在运行，不写入 m.Cmd
 	}
 	m.mu.Unlock()
-	log.Printf("🛑 [%s] stopped", m.Name)
+	slog.Info("instance stopped", "instance", m.Name)
 }
 
 // ── Manager ────────────────────────────────────
@@ -285,7 +285,7 @@ func NewManager(cfg ManageConfig, tag string) *Manager {
 			continue
 		}
 		if strings.Contains(p.Name, "..") || strings.Contains(p.Name, "/") || strings.Contains(p.Name, "\\") {
-			log.Printf("Provider name %q contains invalid characters — skipping", p.Name)
+			slog.Warn("skipping provider with invalid name", "provider", p.Name)
 			continue
 		}
 		workDir := filepath.Join(m.workBase, p.Name)
@@ -295,7 +295,7 @@ func NewManager(cfg ManageConfig, tag string) *Manager {
 			Port: p.Port,
 		}
 		if err := inst.writeEnvFile(p); err != nil {
-			log.Printf("❌ [%s] 创建配置失败: %v", p.Name, err)
+			slog.Error("failed to create config for provider", "provider", p.Name, "error", err)
 			continue
 		}
 		m.instances = append(m.instances, inst)
@@ -311,7 +311,7 @@ func (m *Manager) StartAll() int {
 	}
 	for _, inst := range m.instances {
 		if err := inst.Start(self, m.tag); err != nil {
-			log.Printf("❌ [%s] 启动失败: %v", inst.Name, err)
+			slog.Error("instance start failed", "instance", inst.Name, "error", err)
 		} else {
 			count++
 		}
@@ -343,9 +343,9 @@ func (m *Manager) WatchAndRestart(stop <-chan struct{}) {
 				if !inst.Running {
 					m.healthFailures[inst.Name] = 0
 					inst.mu.Unlock()
-					log.Printf("🔄 [%s] 重启中...", inst.Name)
+					slog.Info("restarting instance", "instance", inst.Name)
 					if err := inst.Start(self, m.tag); err != nil {
-						log.Printf("❌ [%s] 重启失败: %v", inst.Name, err)
+						slog.Error("instance restart failed", "instance", inst.Name, "error", err)
 					}
 				} else {
 					inst.mu.Unlock()
@@ -356,14 +356,14 @@ func (m *Manager) WatchAndRestart(stop <-chan struct{}) {
 						m.healthFailures[inst.Name] = 0
 					} else {
 						if err != nil {
-							log.Printf("⚠️ [%s] 健康检查网络错误: %v", inst.Name, err)
+							slog.Warn("health check network error", "instance", inst.Name, "error", err)
 						} else if resp != nil {
 							resp.Body.Close()
 						}
 						m.healthFailures[inst.Name]++
-						log.Printf("⚠️ [%s] 健康检查失败 (%d/3)", inst.Name, m.healthFailures[inst.Name])
+						slog.Warn("health check failed", "instance", inst.Name, "fail_count", m.healthFailures[inst.Name])
 						if m.healthFailures[inst.Name] >= 3 {
-							log.Printf("🔴 [%s] 健康检查连续失败 %d 次 — 重启", inst.Name, m.healthFailures[inst.Name])
+							slog.Warn("restarting instance after excessive health check failures", "instance", inst.Name, "fail_count", m.healthFailures[inst.Name])
 							inst.Stop()
 							m.healthFailures[inst.Name] = 0
 						}
@@ -396,10 +396,11 @@ func runManager(managePath string, tag string, stop <-chan struct{}) {
 	f, err := openLogFile()
 	if err == nil {
 		logFile = f
-		log.SetOutput(io.MultiWriter(os.Stdout, logFile))
-		log.Printf("📝 日志文件: logs/alvus-manage.log")
+		handler := slog.NewTextHandler(io.MultiWriter(os.Stdout, logFile), &slog.HandlerOptions{Level: slog.LevelInfo})
+		slog.SetDefault(slog.New(handler))
+		slog.Info("log file opened", "path", "logs/alvus-manage.log")
 	} else {
-		log.Printf("⚠️ 无法创建日志文件: %v", err)
+		slog.Warn("failed to open log file", "error", err)
 	}
 	defer func() {
 		if logFile != nil {
@@ -409,24 +410,24 @@ func runManager(managePath string, tag string, stop <-chan struct{}) {
 
 	cfg, err := LoadManagerConfig(managePath)
 	if err != nil {
-		log.Printf("❌ %v", err)
+		slog.Error("config load failed", "error", err)
 		os.Exit(1)
 	}
 
 	mgr := NewManager(cfg, tag)
 	n := mgr.StartAll()
-	log.Printf("🚀 已启动 %d/%d 个实例", n, len(mgr.instances))
+	slog.Info("instances started", "count", n, "total", len(mgr.instances))
 
 	go mgr.WatchAndRestart(stop)
 
 	<-stop
-	log.Printf("🛑 管理器关闭中...")
+	slog.Info("manager shutting down")
 	mgr.StopAll()
 
 	workBase := filepath.Join(workDirName)
 	if fi, err := os.Stat(workBase); err == nil && fi.IsDir() {
 		if err := os.RemoveAll(workBase); err != nil {
-			log.Printf("⚠️ 清理工作目录失败: %v", err)
+			slog.Warn("failed to clean work directory", "error", err)
 		}
 	}
 }

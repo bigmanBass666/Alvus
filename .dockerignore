@@ -1,0 +1,13 @@
+.git/
+.claude/
+.agents/
+.playwright-mcp/
+.omc/
+docs/
+logs/
+manage-work/
+*.exe
+*.test
+regression_test.ps1
+lint.ps1
+benchmark_test.go

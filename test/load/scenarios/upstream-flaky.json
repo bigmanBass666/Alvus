@@ -1,0 +1,20 @@
+{
+  "description": "上游 429 抖动场景 — 上游随机返回 429，模拟不稳定上游",
+  "target": {
+    "path": "/v1/chat/completions",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer test-load-key"
+    },
+    "body": "{\"model\":\"gpt-3.5-turbo\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
+  },
+  "attack": {
+    "rate": 200,
+    "duration": 120,
+    "workers": 20,
+    "timeout": 30,
+    "keepalive": true
+  },
+  "notes": "目标代理需配置 3+ 个 Key，上游约 50% 请求返回 429。预期 KeyPool 正确冷却/恢复，无 Key 泄漏，无异常崩溃。"
+}
