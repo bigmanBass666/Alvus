@@ -68,7 +68,7 @@ function Wait-ForEndpoint {
             $req = [System.Net.HttpWebRequest]::Create($Url)
             $req.Timeout = 1000
             $resp = $req.GetResponse()
-            if ($resp.StatusCode -eq $ExpectedStatus) { return $true }
+            if ($resp.StatusCode -eq $ExpectedStatus) { $resp.Close(); return $true }
             $resp.Close()
         } catch {
             Start-Sleep -Milliseconds 200
@@ -95,6 +95,7 @@ function Invoke-AlvusGet {
             $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
             $body = $reader.ReadToEnd()
             $reader.Close()
+            $resp.Close()
             return @{ StatusCode = [int]$resp.StatusCode; Body = $body; Error = $_.Exception.Message }
         }
         return @{ StatusCode = 0; Body = ""; Error = $_.Exception.Message }
@@ -125,6 +126,7 @@ function Invoke-AlvusPost {
             $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
             $body = $reader.ReadToEnd()
             $reader.Close()
+            $resp.Close()
             return @{ StatusCode = [int]$resp.StatusCode; Body = $body; Error = $_.Exception.Message }
         }
         return @{ StatusCode = 0; Body = ""; Error = $_.Exception.Message }
