@@ -13,7 +13,7 @@
 #>
 
 param(
-    [string]$AlvusRepo = "D:\Test\Alvus-fork",
+    [string]$AlvusRepo = ".",
     [switch]$SkipBuild,
     [switch]$Verbose,
     [string]$Tag = "test"
