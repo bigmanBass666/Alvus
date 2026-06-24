@@ -15,6 +15,14 @@ logs/
 
 # Backup files
 *.exe~
+*.exe
+
+# Build output
+alvus_proxy.exe
+
+# Load test results (binary reports, keep .gitkeep)
+test/load/results/*.bin
+test/load/results/*.html
 
 # IDE / project config
 .omc/

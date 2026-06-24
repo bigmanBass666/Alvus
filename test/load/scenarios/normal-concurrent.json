@@ -1,0 +1,20 @@
+{
+  "description": "正常并发场景 — 500 QPS 持续 60s，多 Key 正常响应",
+  "target": {
+    "path": "/v1/chat/completions",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer test-load-key"
+    },
+    "body": "{\"model\":\"gpt-3.5-turbo\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
+  },
+  "attack": {
+    "rate": 500,
+    "duration": 60,
+    "workers": 50,
+    "timeout": 30,
+    "keepalive": true
+  },
+  "notes": "目标代理需配置 3+ 个有效 API Key，上游正常响应。预期 p99 < 2000ms，零错误率。"
+}

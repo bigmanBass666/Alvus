@@ -1,0 +1,20 @@
+{
+  "description": "全 Key 冷却场景 — 模拟所有 Key 已被 429 限流，代理应返回 429",
+  "target": {
+    "path": "/v1/chat/completions",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer test-load-key"
+    },
+    "body": "{\"model\":\"gpt-3.5-turbo\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
+  },
+  "attack": {
+    "rate": 100,
+    "duration": 120,
+    "workers": 10,
+    "timeout": 30,
+    "keepalive": true
+  },
+  "notes": "目标代理需配置 3 个 Key，上游配置为全部返回 429。预期所有请求返回 429 或代理自定降级响应，无崩溃。"
+}
