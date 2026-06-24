@@ -484,3 +484,153 @@ func TestProxyMaxRetriesConfig(t *testing.T) {
 		t.Errorf("expected exhaustion message, got %q", strings.TrimSpace(string(body)))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 13. Concurrent requests — all succeed
+// ---------------------------------------------------------------------------
+
+func TestProxyConcurrentRequests(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer upstream.Close()
+
+	alvus := setupAlvus(t, upstream, []string{"key-a", "key-b", "key-c", "key-d", "key-e"}, 10, 60)
+	defer alvus.Close()
+
+	const concurrency = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			resp, err := http.Get(alvus.URL + "/v1/models")
+			if err != nil {
+				errs <- fmt.Errorf("req %d: %v", id, err)
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				errs <- fmt.Errorf("req %d: expected 200, got %d", id, resp.StatusCode)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+
+	var failures []string
+	for e := range errs {
+		failures = append(failures, e.Error())
+	}
+	if len(failures) > 0 {
+		t.Fatalf("%d/%d requests failed:\n%s", len(failures), concurrency, strings.Join(failures, "\n"))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 14. Concurrent requests — key rotation under load
+// ---------------------------------------------------------------------------
+
+func TestProxyConcurrentKeyRotation(t *testing.T) {
+	var mu sync.Mutex
+	authSet := make(map[string]int)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authSet[r.Header.Get("Authorization")]++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	alvus := setupAlvus(t, upstream, []string{"key-a", "key-b", "key-c"}, 10, 60)
+	defer alvus.Close()
+
+	const concurrency = 30
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := http.Get(alvus.URL + "/v1/models")
+			if err != nil {
+				t.Errorf("request error: %v", err)
+				return
+			}
+			resp.Body.Close()
+		}()
+	}
+	wg.Wait()
+
+	mu.Lock()
+	keys := make([]string, 0, len(authSet))
+	for k := range authSet {
+		keys = append(keys, k)
+	}
+	uniqueCount := len(keys)
+	mu.Unlock()
+
+	if uniqueCount < 2 {
+		t.Fatalf("expected at least 2 different keys under concurrent load (%d concurrent), got %d: %v", concurrency, uniqueCount, keys)
+	}
+	t.Logf("Concurrent key rotation: %d different keys used across %d requests", uniqueCount, concurrency)
+}
+
+// ---------------------------------------------------------------------------
+// 15. Concurrent requests with interleaved 429 cooldown
+// ---------------------------------------------------------------------------
+
+func TestProxyConcurrentWithCooldown(t *testing.T) {
+	var mu sync.Mutex
+	reqCount := 0
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		count := reqCount
+		reqCount++
+		mu.Unlock()
+		if count%3 == 0 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	alvus := setupAlvus(t, upstream, []string{"key-a", "key-b", "key-c", "key-d", "key-e"}, 10, 2)
+	defer alvus.Close()
+
+	const concurrency = 15
+	var wg sync.WaitGroup
+	errs := make(chan error, concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			resp, err := http.Get(alvus.URL + "/v1/models")
+			if err != nil {
+				errs <- fmt.Errorf("req %d: %v", id, err)
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				errs <- fmt.Errorf("req %d: expected 200, got %d", id, resp.StatusCode)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+
+	var failures []string
+	for e := range errs {
+		failures = append(failures, e.Error())
+	}
+	if len(failures) > 0 {
+		t.Fatalf("%d/%d requests failed with 429 cooldown:\n%s", len(failures), concurrency, strings.Join(failures, "\n"))
+	}
+}
