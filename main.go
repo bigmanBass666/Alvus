@@ -31,6 +31,10 @@ func maskKey(key string) string {
 
 func copyHeaders(dst, src http.Header) {
 	for k, vals := range src {
+		lower := strings.ToLower(k)
+		if lower == "x-admin-token" || lower == "cookie" || lower == "proxy-authorization" {
+			continue
+		}
 		for _, v := range vals {
 			dst.Add(k, v)
 		}
@@ -93,6 +97,9 @@ func (p *KeyPool) Next() (int, string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	n := len(p.keys)
+	if n == 0 {
+		return -1, "", false
+	}
 	start := int(atomic.AddUint64(&p.counter, 1)-1) % n
 	for i := 0; i < n; i++ {
 		idx := (start + i) % n
@@ -388,7 +395,7 @@ func (s *ServerState) configHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
-		if s.cfg.AdminToken != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(s.cfg.AdminToken)) != 1 {
+		if cfg.AdminToken != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(cfg.AdminToken)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -570,8 +577,14 @@ func (s *ServerState) respondJSON(w http.ResponseWriter, status int, data interf
 
 func (s *ServerState) healthHandler(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
+	cfg := s.cfg
 	pool := s.pool
 	s.mu.RUnlock()
+
+	if cfg.AdminToken != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(cfg.AdminToken)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 
 	details := pool.GetKeyDetails()
 	s.respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -735,6 +748,14 @@ func (s *ServerState) dashboardHandler(w http.ResponseWriter, r *http.Request) {
 var dashboardHTML string
 
 func (s *ServerState) clearHandler(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+
+	if cfg.AdminToken != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(cfg.AdminToken)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return

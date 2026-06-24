@@ -175,8 +175,9 @@ func (m *ManagedInstance) Stop() {
 
 	// 等待进程退出，最多 5 秒
 	done := make(chan struct{})
+	cmd := m.Cmd // 在持锁时本地捕获，避免 goroutine 闭包与后续 m.Cmd = nil 竞争
 	go func() {
-		m.Cmd.Wait()
+		cmd.Wait()
 		close(done)
 	}()
 	m.mu.Unlock() // 先解锁，避免 Wait 期间死锁
@@ -187,7 +188,13 @@ func (m *ManagedInstance) Stop() {
 	}
 	m.mu.Lock()
 	m.Running = false
-	m.Cmd = nil
+	// 只有 goroutine 已完成时才安全地清空 m.Cmd
+	select {
+	case <-done:
+		m.Cmd = nil
+	default:
+		// goroutine 仍在运行，不写入 m.Cmd
+	}
 	m.mu.Unlock()
 	log.Printf("🛑 [%s] stopped", m.Name)
 }
