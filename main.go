@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -71,6 +72,7 @@ func buildConfig() (Config, *keypool.KeyPool, error) {
 func loadConfig() (Config, *keypool.KeyPool) {
 	cfg, pool, err := buildConfig()
 	if err != nil {
+		slog.Error("config load failed", "error", err)
 		log.Fatalf("❌ %v", err)
 	}
 	return cfg, pool
@@ -233,16 +235,16 @@ func (s *ServerState) configHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := os.WriteFile(".env", []byte(strings.Join(envLines, "\n")), 0600); err != nil {
-			log.Printf("❌ Failed to write .env: %v", err)
+			slog.Error("failed to write env", "error", err)
 			http.Error(w, "failed to save config", http.StatusInternalServerError)
 			return
 		}
 
-		log.Printf("📝 Configuration updated via API")
+		slog.Info("config updated via api")
 
 		newCfg, newPool, err := reloadConfig()
 		if err != nil {
-			log.Printf("⚠️ Immediate reload failed: %v", err)
+			slog.Warn("reload failed", "error", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
 			json.NewEncoder(w).Encode(map[string]string{"status": "accepted", "warning": "config saved but reload failed: " + err.Error()})
@@ -403,13 +405,13 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		target = cfg.TargetBase + path
 	}
 
-	log.Printf("→ %s %s (%d bytes)", r.Method, target, len(bodyBytes))
+	slog.Info("proxy request", "method", r.Method, "url", target, "bytes", len(bodyBytes))
 
 	for attempt := 0; attempt < cfg.MaxRetries; attempt++ {
 		idx, key, ok := pool.Next()
 		if !ok {
 			wait := pool.TimeUntilAvailable()
-			log.Printf("⏳ All keys cooling — waiting %s (attempt %d/%d)", wait.Round(time.Second), attempt+1, cfg.MaxRetries)
+			slog.Warn("all keys cooling", "wait", wait.Round(time.Second), "attempt", attempt+1, "max", cfg.MaxRetries)
 			time.Sleep(wait + 500*time.Millisecond)
 			continue
 		}
@@ -424,7 +426,7 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("⚠️ Key [%d] network error: %v", idx, err)
+			slog.Warn("key network error", "key_index", idx, "error", err)
 			pool.Cooldown(idx, time.Duration(cfg.CooldownSec)*time.Second)
 			continue
 		}
@@ -439,15 +441,14 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 					cooldown = time.Duration(secs+2) * time.Second
 				}
 			}
-			log.Printf("🚫 Key [%d] %d — cooldown %s | %s", idx, resp.StatusCode, cooldown, pool.Status())
-			log.Printf("   body: %s", body)
+			slog.Warn("key rate limited", "key_index", idx, "status", resp.StatusCode, "cooldown", cooldown, "body", string(body))
 			pool.Cooldown(idx, cooldown)
 			continue
 
 		case http.StatusUnauthorized, http.StatusForbidden:
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			log.Printf("🔑 Key [%d] %d — disabled. body: %s", idx, resp.StatusCode, body)
+			slog.Warn("key disabled", "key_index", idx, "status", resp.StatusCode, "body", string(body))
 			pool.Disable(idx)
 			if pool.ActiveCount() == 0 {
 				http.Error(w, "alvus: all keys are invalid or revoked", http.StatusServiceUnavailable)
@@ -463,14 +464,14 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 			resp.Body.Close()
 
 			s.logs.Append(utils.LogEntry{Timestamp: time.Now().Format(time.RFC3339), Key: key, KeyIndex: idx + 1, Method: r.Method, URL: target, Status: resp.StatusCode, RequestBodySize: len(bodyBytes)})
-			log.Printf("⚠️ %s %s → %d (Terminal Client Error, no retry)", r.Method, target, resp.StatusCode)
+			slog.Warn("terminal client error", "method", r.Method, "url", target, "status", resp.StatusCode)
 			return
 		}
 
 		if resp.StatusCode >= 500 {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			log.Printf("⚠️ Upstream %d: %s (Retrying...)", resp.StatusCode, body)
+			slog.Warn("upstream error, retrying", "status", resp.StatusCode, "body", string(body))
 
 			continue
 		}
@@ -499,7 +500,7 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 		pool.IncrementRequestCount(idx)
 		s.logs.Append(utils.LogEntry{Timestamp: time.Now().Format(time.RFC3339), Key: key, KeyIndex: idx + 1, Method: r.Method, URL: target, Status: resp.StatusCode, RequestBodySize: len(bodyBytes)})
-		log.Printf("✅ %s %s → %d (key[%d], attempt %d)", r.Method, target, resp.StatusCode, idx, attempt+1)
+		slog.Info("proxy success", "method", r.Method, "url", target, "status", resp.StatusCode, "key_index", idx, "attempt", attempt+1)
 		return
 	}
 
@@ -555,7 +556,7 @@ func watchEnvFile(state *ServerState, stop <-chan struct{}) {
 			info, err := os.Stat(".env")
 			if err != nil {
 				if os.IsNotExist(err) {
-					log.Printf("⚠️ .env file deleted — keeping current config")
+					slog.Info("env deleted, keeping current config")
 				}
 				continue
 			}
@@ -565,17 +566,17 @@ func watchEnvFile(state *ServerState, stop <-chan struct{}) {
 			lastMod = info.ModTime()
 			time.Sleep(100 * time.Millisecond) // debounce
 
-			log.Printf("🔄 .env changed — reloading...")
+			slog.Info("env changed, reloading")
 			newCfg, newPool, err := reloadConfig()
 			if err != nil {
-				log.Printf("❌ Reload failed: %v", err)
+				slog.Error("env reload failed", "error", err)
 				continue
 			}
 			state.mu.Lock()
 			state.cfg = newCfg
 			state.pool = newPool
 			state.mu.Unlock()
-			log.Printf("✅ Reloaded — %d keys, target: %s, genai: %s", len(newPool.Keys()), newCfg.TargetBase, newCfg.GenaiBase)
+			slog.Info("config reloaded", "keys", len(newPool.Keys()), "target", newCfg.TargetBase, "genai", newCfg.GenaiBase)
 		}
 	}
 }
@@ -595,7 +596,7 @@ func main() {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Printf("🛑 Shutting down gracefully...")
+		slog.Info("shutting down")
 		close(stop)
 	}()
 
@@ -624,6 +625,7 @@ func main() {
 	// Check port availability and bind
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
+		slog.Error("port in use", "port", cfg.Port, "error", err)
 		log.Fatalf("❌ 端口 %s 已被占用: %v", cfg.Port, err)
 	}
 
@@ -634,7 +636,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
-			log.Printf("❌ Shutdown error: %v", err)
+			slog.Error("shutdown error", "error", err)
 		}
 	}()
 
@@ -642,12 +644,13 @@ func main() {
 	if displayHost == "" {
 		displayHost = "0.0.0.0"
 	}
-	tagSuffix := ""
 	if *processTag != "" {
-		tagSuffix = fmt.Sprintf(" [tag=%s]", *processTag)
+		slog.Info("starting", "tag", *processTag, "port", cfg.Port, "keys", len(pool.Keys()), "target", cfg.TargetBase, "genai", cfg.GenaiBase)
+	} else {
+		slog.Info("starting", "port", cfg.Port, "keys", len(pool.Keys()), "target", cfg.TargetBase, "genai", cfg.GenaiBase)
 	}
-	log.Printf("⚡ Alvus%s %s:%s → %s | genai → %s (%d keys)", tagSuffix, displayHost, cfg.Port, cfg.TargetBase, cfg.GenaiBase, len(pool.Keys()))
 	if err := server.Serve(listener); err != http.ErrServerClosed {
+		slog.Error("server error", "error", err)
 		log.Fatalf("❌ Server error: %v", err)
 	}
 }

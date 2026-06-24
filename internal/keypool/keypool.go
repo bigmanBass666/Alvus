@@ -2,7 +2,7 @@ package keypool
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -112,7 +112,7 @@ func (p *KeyPool) Cooldown(idx int, d time.Duration) {
 	if until := time.Now().Add(d); p.cooldowns[idx].Before(until) {
 		p.cooldowns[idx] = until
 	}
-	log.Printf("🧊 Key [%d] on cooldown for %s", idx, d)
+	slog.Info("key on cooldown", "key_index", idx, "duration", d)
 }
 
 // Disable marks a key as permanently disabled.
@@ -201,7 +201,7 @@ func (p *KeyPool) AddKey(key string) int {
 	p.requestHistory = append(p.requestHistory, []time.Time{})
 	p.lastUsed = append(p.lastUsed, time.Time{})
 	idx := len(p.keys) - 1
-	log.Printf("➕ Key [%d] added to pool", idx)
+	slog.Info("key added to pool", "key_index", idx)
 	return idx
 }
 
@@ -217,6 +217,6 @@ func (p *KeyPool) RemoveKey(idx int) error {
 	p.disabled = append(p.disabled[:idx], p.disabled[idx+1:]...)
 	p.requestHistory = append(p.requestHistory[:idx], p.requestHistory[idx+1:]...)
 	p.lastUsed = append(p.lastUsed[:idx], p.lastUsed[idx+1:]...)
-	log.Printf("➖ Key [%d] removed from pool", idx)
+	slog.Info("key removed from pool", "key_index", idx)
 	return nil
 }
