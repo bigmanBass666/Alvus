@@ -2,7 +2,8 @@
 # Stage 1: Tools — get a static busybox binary for container health checks
 # =============================================================================
 FROM alpine:3.19 AS tools
-RUN apk add --no-cache busybox-static
+RUN apk add --no-cache busybox-static && \
+    cp /bin/busybox.static /busybox.static
 
 # =============================================================================
 # Stage 2: Builder — compile the Go binary
@@ -23,7 +24,7 @@ COPY --from=builder /etc/ssl/certs/ /etc/ssl/certs/
 # Copy the Go binary
 COPY --from=builder /alvus /alvus
 # Copy static busybox for HEALTHCHECK (wget -s spider mode)
-COPY --from=tools /usr/bin/busybox.static /bin/busybox
+COPY --from=tools /busybox.static /bin/busybox
 
 EXPOSE 3000
 USER nonroot:nonroot
