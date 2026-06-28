@@ -4,6 +4,7 @@ import (
 	"alvus/internal/config"
 	"alvus/internal/keypool"
 	"alvus/internal/logstore"
+	alvusmetrics "alvus/internal/metrics"
 	"alvus/internal/utils"
 	"bytes"
 	"context"
@@ -24,6 +25,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func loadConfig() (*config.Config, *keypool.KeyPool) {
@@ -61,16 +65,19 @@ func reloadConfig() (*config.Config, *keypool.KeyPool, error) {
 // ── Server ────────────────────────────────────
 
 type ServerState struct {
-	mu        sync.RWMutex
-	cfg       *config.Config
-	pool      *keypool.KeyPool
-	mux       *http.ServeMux
-	client    *http.Client
-	logs      *logstore.LogStore
-	startTime time.Time
+	mu              sync.RWMutex
+	cfg             *config.Config
+	pool            *keypool.KeyPool
+	mux             *http.ServeMux
+	client          *http.Client
+	logs            *logstore.LogStore
+	startTime       time.Time
+	metrics         *alvusmetrics.Metrics
+	metricsRegistry *prometheus.Registry
 }
 
 func newServerState(cfg *config.Config, pool *keypool.KeyPool) *ServerState {
+	reg, m := alvusmetrics.NewRegistry()
 	s := &ServerState{
 		cfg: cfg, pool: pool, mux: http.NewServeMux(),
 		client: &http.Client{
@@ -84,8 +91,10 @@ func newServerState(cfg *config.Config, pool *keypool.KeyPool) *ServerState {
 				return http.ErrUseLastResponse
 			},
 		},
-		logs:      logstore.New(1000),
-		startTime: time.Now(),
+		logs:            logstore.New(1000),
+		startTime:       time.Now(),
+		metrics:         m,
+		metricsRegistry: reg,
 	}
 	s.mux.HandleFunc("/health", s.healthHandler)
 	s.mux.HandleFunc("/logs", s.logsHandler)
@@ -98,6 +107,7 @@ func newServerState(cfg *config.Config, pool *keypool.KeyPool) *ServerState {
 	s.mux.HandleFunc("DELETE /api/keys/{index}", s.deleteKeyHandler)
 	s.mux.HandleFunc("GET /api/stats", s.statsHandler)
 	s.mux.HandleFunc("POST /api/reload", s.reloadHandler)
+	s.mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	// Block service worker requests to prevent 404s and unnecessary upstream proxying
 	s.mux.HandleFunc("/sw.js", s.swHandler)
 	s.mux.HandleFunc("/", s.proxyHandler)
@@ -350,6 +360,12 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	client := s.client
 	s.mu.RUnlock()
 
+	start := time.Now()
+	recordMetrics := func(statusClass, keyIndex string) {
+		s.metrics.RequestsTotal.WithLabelValues(r.Method, statusClass, keyIndex).Inc()
+		s.metrics.RequestDuration.WithLabelValues(r.Method, statusClass).Observe(time.Since(start).Seconds())
+	}
+
 	var bodyBytes []byte
 	if r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB limit
@@ -358,6 +374,7 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		r.Body.Close()
 		if err != nil {
 			http.Error(w, "failed to read request body", http.StatusBadRequest)
+			recordMetrics("4xx", "")
 			return
 		}
 	}
@@ -393,7 +410,9 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(bodyBytes))
 		if err != nil {
+			s.metrics.UpstreamErrors.WithLabelValues("network").Inc()
 			http.Error(w, "proxy: failed to build upstream request", http.StatusInternalServerError)
+			recordMetrics("5xx", "")
 			return
 		}
 		utils.CopyHeaders(req.Header, r.Header)
@@ -402,12 +421,13 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		resp, err := client.Do(req)
 		if err != nil {
 			slog.Warn("key network error", "key_index", idx, "key_name", pool.Name(idx), "error", err)
-			_ = pool.Cooldown(idx, time.Duration(cfg.CooldownSec)*time.Second)
+			s.metrics.UpstreamErrors.WithLabelValues("network").Inc()
+			pool.Cooldown(idx, time.Duration(cfg.CooldownSec)*time.Second)
 			continue
 		}
 
 		switch resp.StatusCode {
-		case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable:
+		case http.StatusTooManyRequests:
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			cooldown := time.Duration(cfg.CooldownSec) * time.Second
@@ -417,16 +437,27 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			slog.Warn("key rate limited", "key_index", idx, "key_name", pool.Name(idx), "status", resp.StatusCode, "cooldown", cooldown, "body", string(body))
-			_ = pool.Cooldown(idx, cooldown)
+			s.metrics.UpstreamErrors.WithLabelValues("rate_limited").Inc()
+			pool.Cooldown(idx, cooldown)
+			continue
+
+		case http.StatusBadGateway, http.StatusServiceUnavailable:
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			slog.Warn("upstream server error", "key_index", idx, "key_name", pool.Name(idx), "status", resp.StatusCode, "body", string(body))
+			s.metrics.UpstreamErrors.WithLabelValues("server_error").Inc()
+			pool.Cooldown(idx, time.Duration(cfg.CooldownSec)*time.Second)
 			continue
 
 		case http.StatusUnauthorized, http.StatusForbidden:
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			slog.Warn("key disabled", "key_index", idx, "key_name", pool.Name(idx), "status", resp.StatusCode, "body", string(body))
-			_ = pool.Disable(idx)
+			s.metrics.UpstreamErrors.WithLabelValues("auth_rejected").Inc()
+			pool.Disable(idx)
 			if pool.ActiveCount() == 0 {
 				http.Error(w, "alvus: all keys are invalid or revoked", http.StatusServiceUnavailable)
+				recordMetrics("5xx", "")
 				return
 			}
 			continue
@@ -440,6 +471,7 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 			s.logs.Append(utils.LogEntry{Timestamp: time.Now().Format(time.RFC3339), Key: key, KeyIndex: idx + 1, KeyName: pool.Name(idx), Method: r.Method, URL: target, Status: resp.StatusCode, RequestBodySize: len(bodyBytes)})
 			slog.Warn("terminal client error", "method", r.Method, "url", target, "status", resp.StatusCode)
+			recordMetrics("4xx", fmt.Sprintf("%d", idx))
 			return
 		}
 
@@ -447,7 +479,7 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			slog.Warn("upstream error, retrying", "status", resp.StatusCode, "body", string(body))
-
+			s.metrics.UpstreamErrors.WithLabelValues("server_error").Inc()
 			continue
 		}
 
@@ -476,10 +508,12 @@ func (s *ServerState) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		pool.IncrementRequestCount(idx)
 		s.logs.Append(utils.LogEntry{Timestamp: time.Now().Format(time.RFC3339), Key: key, KeyIndex: idx + 1, KeyName: pool.Name(idx), Method: r.Method, URL: target, Status: resp.StatusCode, RequestBodySize: len(bodyBytes)})
 		slog.Info("proxy success", "method", r.Method, "url", target, "status", resp.StatusCode, "key_index", idx, "key_name", pool.Name(idx), "attempt", attempt+1)
+		recordMetrics(alvusmetrics.StatusLabel(resp.StatusCode), fmt.Sprintf("%d", idx))
 		return
 	}
 
 	http.Error(w, "alvus: exhausted all retries", http.StatusServiceUnavailable)
+	recordMetrics("5xx", "")
 }
 
 func (s *ServerState) logsHandler(w http.ResponseWriter, r *http.Request) {
@@ -724,6 +758,24 @@ func watchEnvFile(state *ServerState, stop <-chan struct{}) {
 	}
 }
 
+// refreshKeyPoolMetrics periodically updates the keypool gauge metrics.
+func refreshKeyPoolMetrics(state *ServerState, stop <-chan struct{}) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			state.mu.RLock()
+			pool := state.pool
+			state.mu.RUnlock()
+			state.metrics.RefreshKeyPoolGauge(pool)
+		}
+	}
+}
+
 // ── Main ──────────────────────────────────────
 
 func main() {
@@ -760,7 +812,11 @@ func main() {
 	cfg, pool := loadConfig()
 	state := newServerState(cfg, pool)
 
+	// Initial key pool metric refresh
+	state.metrics.RefreshKeyPoolGauge(state.pool)
+
 	go watchEnvFile(state, stop)
+	go refreshKeyPoolMetrics(state, stop)
 
 	addr := fmt.Sprintf("%s:%d", host, cfg.Port)
 

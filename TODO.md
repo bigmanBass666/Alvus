@@ -3,18 +3,42 @@
 > 基于对项目现有架构、代码和目标的综合分析，整理出的后续可做事项。
 > 按优先级和影响范围分组，具体实施时可根据当前聚焦点选择。
 
-## ✅ 已完成（当前分支已含）
+## ✅ 已完成（已合并到 main 或 PR 中）
 
+### 核心功能
 - [x] **配置管理增强** — `internal/config` 包，含 `Validate()`/`Diff()`/`Sanitized()`，启动校验 + 热重载校验 + diff 日志
-- [x] **配置管理集成测试** — `integration_test.go`（启动校验 / 热重载 diff / 热重载回滚 3 个场景）
+- [x] **配置管理集成测试** — `integration_test.go`（启动校验 / 热重载 diff / 热重载回滚）
 - [x] **日志系统迁移为结构化日志** — 全部 `log.Printf` → `log/slog`，分级 Info/Warn/Error
 - [x] **配置变更 diff 日志** — 热重载时记录变更字段（Key 脱敏）
 - [x] **关键 Bug 修复** — KeyPool 空池 panic、竞态条件、敏感 Header 泄露、未鉴权端点等 23 项
 - [x] **项目结构重构** — `internal/keypool/`、`internal/logstore/`、`internal/utils/` 子包拆分
 - [x] **Docker 容器化** — 多阶段构建 `Dockerfile` + `.dockerignore` + `docker-compose.yml`
 - [x] **压测与基准测试** — Go Benchmark（KeyPool + Proxy 三场景）+ Vegeta 压测脚本 + mock 上游
-- [x] **压测基础设施验证** — Vegeta 安装、冒烟测试（50 QPS 100% 成功）、全量压测（500 QPS 执行通过）、`run-load-test.ps1` 脚本修复
+- [x] **压测基础设施验证** — Vegeta 安装、冒烟测试（50 QPS 100% 成功）、全量压测（500 QPS 执行通过）
 - [x] **性能基线数据** — 50 QPS: p99 15.8ms, 100% 成功 / 500 QPS: 代理开始饱和（32% 成功, p99 34s）
+- [x] **API Key 名称支持** — `key==name` 格式解析，名称在日志 / API 响应 / Dashboard 全链路展示（8 个新测试）
+- [x] **管理 API 增强** — 5 个新端点（POST disable / PUT cooldown / DELETE {index} / GET stats / POST reload）+ KeyPool 边界检查 + LogStore 统计计数（7 个新测试）
+- [x] **可观测性：Prometheus Metrics** — 4 个指标（requests_total / request_duration_seconds / keypool_keys / upstream_errors_total），`/metrics` 端点，proxyHandler 全埋点，自定义 Registry 隔离
+- [x] **Metrics 验收测试** — 6 个集成验收测试，mock upstream 真实代理请求验证所有 4 个指标增量正确
+- [x] **CLAUDE.md 测试策略对齐** — 明确 Testing Trophy 模型，集成验收测试为主力
+
+### 80+ 测试覆盖
+
+| 文件 | 测试数 | 类型 |
+|------|--------|------|
+| `internal/config/config_test.go` | 23 | 单元测试 |
+| `internal/keypool/keypool_test.go` | 12 | 单元测试 |
+| `internal/logstore/logstore_test.go` | 4 | 单元测试 |
+| `handlers_test.go` | 14 | Handler 测试 |
+| `logstore_test.go` | 4 | Handler 测试 |
+| `proxy_test.go` | 17 | **集成验收测试** |
+| `integration_test.go` | 4 | **集成测试** |
+| `metrics_verification_test.go` | 6 | **集成验收测试** |
+| **总计** | **84** | |
+
+## ⚠️ 已知约束
+
+- **ccswitch 领域不碰** — 格式化/整流/转发相关（`DISABLE_THINKING`、请求修改、响应变换、provider 路由）ccswitch 已成熟，不重复造轮
 
 ## P0 — 验证结果摘要
 
@@ -57,35 +81,21 @@
 **原因：** 项目定位已明确为 **"单 provider 内的 api key 轮转"**，与 ccswitch 互补。
 
 - **请求路由标准化** — 确保代理的接口设计与 ccswitch 的 IETF RFC 兼容
-- **`DISABLE_THINKING` 支持** — 以通用 `x-provider-options: disable-thinking=key` 头实现（非 OpenAI 特定）
 - **多 provider 代理模式** — 检查 ccswitch 如何分发流量到各 provider，确保 Alvus 的 KeyPool 能平滑接入
 - **动态 provider 配置 API** — `/providers` 端点管理多 upstream
-
-### 管理 API 增强
-
-当前 `/keys`、`/health`、`/clear`、`/logs` 已提供基础功能。可以扩展：
-
-- `POST /keys` — 添加单个 Key
-- `DELETE /keys/:index` — 删除指定 Key
-- `POST /keys/:index/disable` — 手动禁用 Key
-- `PUT /keys/:index/cooldown` — 手动触发 Key 冷却
-- `GET /stats` — 代理运行时统计（请求量、成功率、平均延迟）
-- `POST /reload` — 手动触发配置热重载
-- API 响应标准化（统一 JSON 格式、错误码）
-
-### 可观测性：Metrics + Tracing
-
-- `/metrics` 端点暴露 Prometheus 指标：
-  - `alvus_requests_total{method, status, key_index}`
-  - `alvus_request_duration_seconds{method, status}`
-  - `alvus_keypool_active_keys` / `alvus_keypool_cooldown_keys`
-- 可选 OpenTelemetry tracing
+- ❌ 不做 `DISABLE_THINKING` 等整流功能（ccswitch 领域）
 
 ### 日志系统进一步增强
 
 - 日志级别动态调整（通过 API 或信号）
 - Debug 级别可选请求/响应体日志（注意敏感数据清洗）
 - 结构化字段命名标准化
+
+### Error Handling 统一
+
+- 所有代理错误统一 JSON 格式：`{"error": {"code": "...", "message": "..."}}`
+- 上游超时、上游 5xx、Key 不可用等各场景定义错误码
+- 客户端 SDK 直接解析
 
 ## P2 — 值得做（优化打磨）
 
@@ -95,12 +105,6 @@
 - （可选）Dashboard 独立服务
 - 持久化数据卷（日志、配置）
 - 网络配置（内部通信、外部暴露）
-
-### Error Handling 统一
-
-- 所有代理错误统一 JSON 格式：`{"error": {"code": "...", "message": "..."}}`
-- 上游超时、上游 5xx、Key 不可用等各场景定义错误码
-- 客户端 SDK 直接解析
 
 ### 安全性增强
 
@@ -159,15 +163,3 @@
 - GoReleaser 自动发布多平台二进制
 - Docker 镜像自动构建推送到 ghcr.io
 - Semantic Release + 自动 changelog
-
-## 你关心的方向
-
-1. **先验证压测和 Docker** — 已有的工作成果需要落地（验证→提交）
-2. **ccswitch 集成** — 按项目定位补齐协作接口
-3. **按优先级做** — 从 P1 开始逐个击破
-4. **挑感兴趣的先做** — 每个项目都有独立价值
-5. **告诉我聚焦方向** — 我帮你拆成可执行的 spec + tasks
-
----
-
-- 给 api key 添加名称支持,现在的key都没有名称, 就很难分辨.
