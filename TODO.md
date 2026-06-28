@@ -22,22 +22,26 @@
 - [x] **Metrics 验收测试** — 6 个集成验收测试，mock upstream 真实代理请求验证所有 4 个指标增量正确
 - [x] **CLAUDE.md 测试策略对齐** — 明确 Testing Trophy 模型，集成验收测试为主力
 - [x] **Error Handling 统一** — 4 个错误码（BAD_REQUEST / UPSTREAM_ERROR / ALL_KEYS_INVALID / EXHAUSTED_RETRIES），proxyHandler 错误响应统一 JSON 格式 `{"error":{"code":"...","message":"..."}}`，4 个集成验收测试覆盖所有错误路径
+- [x] **两层熔断器（智能重试与退避 + 日限额自动检测）** — KeyCircuitBreaker（CLOSED/OPEN/PERMA 三态 + 指数退避）+ UpstreamCircuitBreaker（CLOSED/OPEN/HALF_OPEN 三态），4 个集成验收测试
+- [x] **main.go 拆包** — 977 行 → 98 行，`internal/server/` 包 5 文件拆分（server.go / handlers.go / proxy.go / middleware.go / lifecycle.go）
+- [x] **启动配置友好校验** — 中文错误消息 + 标准退出码（配置错 exit 2、运行时错 exit 1、系统错 exit 3）
+- [x] **README 重写** — 覆盖熔断器 / Metrics / 管理 API / 配置校验 / 压测 / 测试策略，450+ 行完整文档
 
-### 80+ 测试覆盖
+### 115 测试覆盖
 
 | 文件 | 测试数 | 类型 |
 |------|--------|------|
-| `internal/config/config_test.go` | 23 | 单元测试 |
+| `internal/config/config_test.go` | 24 | 单元测试 |
 | `internal/keypool/keypool_test.go` | 12 | 单元测试 |
-| `internal/logstore/logstore_test.go` | 4 | 单元测试 |
+| `internal/logstore/logstore_test.go` | 5 | 单元测试 |
 | `internal/circuitbreaker/key_test.go` | 10 | 单元测试 |
 | `internal/circuitbreaker/upstream_test.go` | 9 | 单元测试 |
-| `handlers_test.go` | 14 | Handler 测试 |
+| `handlers_test.go` | 16 | Handler 测试 |
 | `logstore_test.go` | 4 | Handler 测试 |
 | `proxy_test.go` | 25 | **集成验收测试** |
 | `integration_test.go` | 4 | **集成测试** |
 | `metrics_verification_test.go` | 6 | **集成验收测试** |
-| **总计** | **111** | |
+| **总计** | **115** | |
 
 ## 🔜 短期计划（待讨论决策）
 
@@ -54,16 +58,17 @@
 - 新增配置项：`BACKOFF_CAP_SEC` / `BACKOFF_MULTIPLIER` / `CB_RESET_SEC` / `UPSTREAM_CB_THRESHOLD`
 - 4 个集成验收测试覆盖所有错误分支
 
-### C. 启动配置友好校验
+### C. 启动配置友好校验 ✅
 
-**人性化错误消息**：当前 `.env` 缺字段或格式错时 `log.Fatalf` 直接崩，错误信息是 Go 原始的。改为：明确告诉用户哪一行/哪个字段有问题 + 标准退出码。
+**人性化错误消息**：配置缺少/格式错误时使用中文消息 + 标准退出码（exit 2），字段名明确指出。
+- 集成验收测试覆盖缺失字段/格式错误/有效配置三场景
 
-### D. P0 收尾扫尾
+### D. P0 收尾扫尾 ✅
 
-- 确认 TODO.md P0 列表全部清掉
-- README 补全（安装/配置/API 文档）
-- 确认所有 spec 文档与当前代码一致
-- 清理 repo 中遗留的临时文件/未跟踪文件
+- [x] main.go 拆包 → `internal/server/` 5 文件拆分（977 行 → 98 行）
+- [x] README 补全（安装/配置/API 文档/熔断器/压测/测试策略）
+- [x] 确认所有 spec 文档与当前代码一致
+- [x] 清理 repo 中遗留的临时文件/未跟踪文件
 
 ## ⚠️ 已知约束
 
