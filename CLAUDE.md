@@ -14,7 +14,25 @@
 
 ## 测试设计规范
 
-单元测试 + 验收测试
+### 测试策略：Testing Trophy（与主流标准对齐）
+
+当前业界主流（Go 生态、Kubernets、Prometheus）共识是 Testing Trophy 模型。
+
+```
+优先级排序：
+1. 静态分析（go vet, go build, 类型检查）— 零成本，收益最大
+2. 集成验收测试（mock upstream + 真实代理请求）— 主力，最高 ROI
+3. 单元测试（纯内部逻辑，如 parseKeys、CoolingCount）— 只在复杂逻辑时写
+4. HTTP Handler 测试（mock 依赖测路由）— 仅 API 契约变更时才写，不每改一行都补
+```
+
+**原则：**
+- 新功能**默认**做集成验收测试（before/after 对比，证明它在真实场景下工作）
+  - 写 `proxy_test.go` 那样带 mock upstream 的集成测试
+  - **不写** `handlers_test.go` 那样 mock 掉一切只测 JSON 的 Handler 测试
+- 单元测试只留给复杂内部逻辑，不为简单 getter/setter 写
+- Handler 测试（mock 掉依赖只测路由的）低价值，已有就留着当 API 契约文档，新功能不再写
+- 永远有 **before/after 对比**，不测绝对值的快照
 
 ### 验收测试三问（每次写测试前必须自我检查）
 
