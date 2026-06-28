@@ -102,6 +102,11 @@ func newServerState(cfg *config.Config, pool *keypool.KeyPool) *ServerState {
 	s.mux.HandleFunc("/clear", s.clearHandler)
 	s.mux.HandleFunc("/api/config", s.configHandler)
 	s.mux.HandleFunc("/api/keys", s.keysHandler)
+	s.mux.HandleFunc("POST /api/keys/{index}/disable", s.disableKeyHandler)
+	s.mux.HandleFunc("PUT /api/keys/{index}/cooldown", s.cooldownKeyHandler)
+	s.mux.HandleFunc("DELETE /api/keys/{index}", s.deleteKeyHandler)
+	s.mux.HandleFunc("GET /api/stats", s.statsHandler)
+	s.mux.HandleFunc("POST /api/reload", s.reloadHandler)
 	s.mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	// Block service worker requests to prevent 404s and unnecessary upstream proxying
 	s.mux.HandleFunc("/sw.js", s.swHandler)
