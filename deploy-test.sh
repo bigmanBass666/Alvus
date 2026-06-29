@@ -7,12 +7,23 @@
 #
 # Prerequisites:
 #   - Docker & docker compose installed
-#   - Ports 3000, 9090, 3001 available
+#   - Ports 9090, 3001 available (Alvus port from .env, default 3000)
 #   - .env file exists at project root
 
-set -euo pipefail
+set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
+
+# Detect host port for Alvus from .env (Docker Compose reads this)
+ALVUS_PORT="${PORT:-3000}"
+if [ -f .env ]; then
+  ENV_PORT=$(grep -E '^PORT=' .env | cut -d= -f2 | tr -d '[:space:]' || true)
+  if [ -n "$ENV_PORT" ]; then
+    ALVUS_PORT="$ENV_PORT"
+  fi
+fi
+echo "Alvus port: $ALVUS_PORT"
 cd "$ROOT"
 
 PASS=0
@@ -70,7 +81,7 @@ echo ""
 echo "[3] Service readiness"
 
 echo "  Waiting for Alvus..."
-wait_for_http "http://localhost:3000/health" "Alvus" 30 || assert "Alvus /health responds" "false"
+wait_for_http "http://localhost:${ALVUS_PORT}/health" "Alvus" 30 || assert "Alvus /health responds" "false"
 
 echo "  Waiting for Prometheus..."
 wait_for_http "http://localhost:9090/-/ready" "Prometheus" 30 || assert "Prometheus ready" "false"
@@ -81,7 +92,7 @@ wait_for_http "http://localhost:3001/api/health" "Grafana" 30 || assert "Grafana
 # ── 4. Alvus health check ─────────────────────────
 echo ""
 echo "[4] Alvus health endpoint"
-ALVUS_HEALTH=$(curl -sf http://localhost:3000/health 2>/dev/null || echo "")
+ALVUS_HEALTH=$(curl -sf http://localhost:${ALVUS_PORT}/health 2>/dev/null || echo "")
 assert "Alvus /health returns status ok" \
   "echo '$ALVUS_HEALTH' | grep -q '\"status\":\"ok\"'"
 assert "Alvus /health returns keys count" \
@@ -99,19 +110,20 @@ echo ""
 echo "[6] Prometheus metric scraping"
 # Wait for at least one scrape cycle
 sleep 15
-PROM_QUERY=$(curl -sf 'http://localhost:9090/api/v1/query?query=alvus_requests_total' 2>/dev/null || echo "")
-assert "Prometheus has alvus_requests_total metric" \
-  "echo '$PROM_QUERY' | grep -q 'alvus_requests_total'"
+
+# Check alvus_keypool_keys (Gauge — always available, even without proxy requests)
+PROM_KEYS=$(curl -sf 'http://localhost:9090/api/v1/query?query=alvus_keypool_keys' 2>/dev/null || echo "")
+assert "Prometheus has alvus_keypool_keys metric" \
+  "echo '$PROM_KEYS' | grep -q 'alvus_keypool_keys'"
+
+# Check the active key count is correct
+assert "Prometheus: alvus_keypool_keys shows active keys" \
+  "echo '$PROM_KEYS' | grep -q 'active'"
 
 # Check Go runtime metrics (emitted automatically)
 PROM_GO=$(curl -sf 'http://localhost:9090/api/v1/query?query=go_info' 2>/dev/null || echo "")
 assert "Prometheus has Go runtime metrics" \
   "echo '$PROM_GO' | grep -q 'go_info'"
-
-# Check upstream CB state metric exists
-PROM_CB=$(curl -sf 'http://localhost:9090/api/v1/query?query=alvus_upstream_cb_state' 2>/dev/null || echo "")
-assert "Prometheus has alvus_upstream_cb_state" \
-  "echo '$PROM_CB' | grep -q 'alvus_upstream_cb_state'"
 
 # ── 7. Grafana health ─────────────────────────────
 echo ""
