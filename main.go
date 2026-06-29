@@ -55,7 +55,7 @@ func main() {
 	}
 
 	cfg, pool := server.LoadConfig()
-	state := server.NewServerState(cfg, pool, dashboardHTML)
+	state := server.NewServerState(cfg, pool, dashboardHTML, cfg.KeysFile)
 
 	// Initial key pool metric refresh
 	state.Metrics().RefreshKeyPoolGauge(pool)
