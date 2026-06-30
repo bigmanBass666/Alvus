@@ -1252,6 +1252,131 @@ func TestProxy_AllDisabled_Returns503(t *testing.T) {
 	}
 }
 
+
+// ---------------------------------------------------------------------------
+// NonRetryable error classification tests
+// ---------------------------------------------------------------------------
+
+// TestProxy_NonRetryable400_ReturnsImmediately verifies that a 400 response
+// from upstream is returned immediately without retrying.
+func TestProxy_NonRetryable400_ReturnsImmediately(t *testing.T) {
+	var mu sync.Mutex
+	callCount := 0
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		callCount++
+		mu.Unlock()
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":"bad request"}`))
+	}))
+	defer upstream.Close()
+
+	alvus := setupAlvus(t, upstream, []string{"test-key-a", "test-key-b"}, 3, 60)
+	defer alvus.Close()
+
+	resp, err := http.Get(alvus.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+
+	mu.Lock()
+	count := callCount
+	mu.Unlock()
+	if count > 1 {
+		t.Errorf("expected upstream to be called exactly once (non-retryable), called %d times", count)
+	}
+}
+
+// TestProxy_NonRetryable422_ReturnsImmediately verifies that a 422 response
+// from upstream is returned immediately without retrying.
+func TestProxy_NonRetryable422_ReturnsImmediately(t *testing.T) {
+	var mu sync.Mutex
+	callCount := 0
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		callCount++
+		mu.Unlock()
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(`{"error":"unprocessable"}`))
+	}))
+	defer upstream.Close()
+
+	alvus := setupAlvus(t, upstream, []string{"test-key-a", "test-key-b"}, 3, 60)
+	defer alvus.Close()
+
+	resp, err := http.Get(alvus.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("expected 422, got %d", resp.StatusCode)
+	}
+
+	mu.Lock()
+	count := callCount
+	mu.Unlock()
+	if count > 1 {
+		t.Errorf("expected upstream to be called exactly once (non-retryable), called %d times", count)
+	}
+}
+
+// TestProxy_NonRetryable_DoesNotPenalizeKey verifies that after a NonRetryable
+// 4xx error, the key remains usable for the next (valid) request.
+func TestProxy_NonRetryable_DoesNotPenalizeKey(t *testing.T) {
+	var mu sync.Mutex
+	callCount := 0
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		callCount++
+		count := callCount
+		mu.Unlock()
+		if count == 1 {
+			// First call: return non-retryable 400
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":"bad request"}`))
+		} else {
+			// Subsequent calls: succeed
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"ok"}`))
+		}
+	}))
+	defer upstream.Close()
+
+	alvus := setupAlvus(t, upstream, []string{"test-key-a"}, 1, 60)
+	defer alvus.Close()
+
+	// First request — should get 400
+	resp1, err := http.Get(alvus.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("first request failed: %v", err)
+	}
+	resp1.Body.Close()
+	if resp1.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 on first request, got %d", resp1.StatusCode)
+	}
+
+	// Second request — same key should still work
+	resp2, err := http.Get(alvus.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("second request failed: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 on second request, got %d", resp2.StatusCode)
+	}
+}
+
 	// ---------------------------------------------------------------------------
 	// Key persistence tests
 	// ---------------------------------------------------------------------------
