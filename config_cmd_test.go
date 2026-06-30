@@ -51,8 +51,9 @@ func TestConfigInit_CreatesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("created config.toml is not valid: %v", err)
 	}
-	if cfg.TargetBase != "" {
-		t.Errorf("TargetBase should be empty in default config, got %q", cfg.TargetBase)
+	// Generated config should have example placeholder providers
+	if cfg.TargetBase != "https://api.example-a.com/v1" {
+		t.Errorf("TargetBase should be set to example-a target, got %q", cfg.TargetBase)
 	}
 }
 

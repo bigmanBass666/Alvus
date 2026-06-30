@@ -53,13 +53,32 @@ If a .env file is detected in the current directory, a migration hint is printed
 			return fmt.Errorf("failed to create config directory %s: %w", dir, err)
 		}
 
-		// Write default config
-		cfg := config.DefaultConfig()
-		if err := config.SaveToml(cfg, path); err != nil {
+		// Write example config with placeholder providers
+		tc := &config.TomlConfig{
+			Provider: map[string]config.TomlProviderConfig{
+				"example-a": {
+					Target:      "https://api.example-a.com/v1",
+					Genai:       "https://api.example-a.com",
+					Port:        3001,
+					CooldownSec: 60,
+					MaxRetries:  3,
+				},
+				"example-b": {
+					Target:      "https://api.example-b.com/v1",
+					Port:        3002,
+					CooldownSec: 30,
+					MaxRetries:  5,
+				},
+			},
+		}
+		if err := config.SaveTomlConfig(tc, path); err != nil {
 			return fmt.Errorf("failed to write config file: %w", err)
 		}
 
-		fmt.Printf("Default configuration written to %s\n", path)
+		fmt.Printf("Example configuration written to %s\n", path)
+		fmt.Println("Edit the file to add your providers, then run:")
+		fmt.Println("  alvus key add <provider> <api-key>  # to add API keys")
+		fmt.Println("  alvus start                         # to start the proxy")
 
 		// Migration hint if .env exists
 		if _, err := os.Stat(".env"); err == nil {

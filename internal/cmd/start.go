@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -104,6 +105,17 @@ func startServer(dashboardHTML string, isLocal, isNetwork bool, processTag strin
 	if err := mgr.StartAll(host); err != nil {
 		slog.Error("some instances failed to start", "error", err)
 	}
+
+	// ── Write PID file ─────────────────────────────
+	pidData := []byte(fmt.Sprintf("%d\n", os.Getpid()))
+	if err := os.WriteFile(pidFileName, pidData, 0644); err != nil {
+		slog.Warn("failed to write PID file", "error", err)
+	}
+	defer func() {
+		if err := os.Remove(pidFileName); err != nil && !os.IsNotExist(err) {
+			slog.Warn("failed to remove PID file", "error", err)
+		}
+	}()
 
 	// ── Background tasks ──────────────────────────
 	mgr.StartBackgroundTasks()
