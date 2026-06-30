@@ -5,14 +5,17 @@
 package config
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
 	"alvus/internal/utils"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // Exit codes for controlled process termination.
@@ -520,4 +523,125 @@ func loadDotEnv(filename string) error {
 		}
 	}
 	return nil
+}
+
+// ---- TOML 配置支持 ----
+
+// TomlProviderConfig 对应 TOML 中单个 [provider.*] 的配置。
+type TomlProviderConfig struct {
+	Target      string `toml:"target"`
+	Genai       string `toml:"genai,omitempty"`
+	Port        int    `toml:"port,omitempty"`
+	CooldownSec int    `toml:"cooldown_sec,omitempty"`
+	MaxRetries  int    `toml:"max_retries,omitempty"`
+}
+
+// TomlConfig 对应整个 config.toml 文件结构。
+type TomlConfig struct {
+	Provider map[string]TomlProviderConfig `toml:"provider"`
+}
+
+// LoadToml 读取 TOML 配置文件并转换为 Config。
+// 文件必须存在且格式合法；格式错误或缺少 [provider] 段返回 error。
+func LoadToml(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, &ConfigError{
+			Category: "system",
+			Message:  fmt.Sprintf("系统错误: 读取 TOML 配置文件 %q 失败: %v", path, err),
+		}
+	}
+	var tc TomlConfig
+	if err := toml.Unmarshal(data, &tc); err != nil {
+		return nil, &ConfigError{
+			Category: "config",
+			Message:  fmt.Sprintf("配置错误: TOML 解析失败: %v", err),
+		}
+	}
+	if len(tc.Provider) == 0 {
+		return nil, &ConfigError{
+			Category: "config",
+			Message:  "配置错误: TOML 配置缺少 [provider] 段",
+		}
+	}
+	// 取第一个 provider 作为主配置
+	for name, p := range tc.Provider {
+		return tomlToConfig(name, &p), nil
+	}
+	return nil, &ConfigError{
+		Category: "config",
+		Message:  "配置错误: TOML 配置缺少 [provider] 段",
+	}
+}
+
+// SaveToml 将 Config 写入 TOML 文件。覆盖已存在的文件。
+func SaveToml(cfg *Config, path string) error {
+	tc := configToToml(cfg)
+	var buf bytes.Buffer
+	encoder := toml.NewEncoder(&buf)
+	if err := encoder.Encode(tc); err != nil {
+		return fmt.Errorf("TOML 编码失败: %w", err)
+	}
+	return os.WriteFile(path, buf.Bytes(), 0644)
+}
+
+// XDGConfigPath 返回平台相关的 XDG 配置路径。
+// Windows: %APPDATA%/alvus/config.toml
+// Linux/macOS: $XDG_CONFIG_HOME/alvus/config.toml → ~/.config/alvus/config.toml
+func XDGConfigPath() (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("获取用户配置目录失败: %w", err)
+	}
+	return filepath.Join(configDir, "alvus", "config.toml"), nil
+}
+
+// DetectConfigSource 按优先级自动检测配置源。
+// 优先级: specifiedPath > XDG config.toml > .env
+// 返回检测到的路径、是否为 TOML 源、错误信息。
+func DetectConfigSource(specifiedPath string) (source string, fromToml bool, err error) {
+	if specifiedPath != "" {
+		return specifiedPath, strings.HasSuffix(specifiedPath, ".toml"), nil
+	}
+	// 检查 XDG 配置路径是否存在
+	xdgPath, xdgErr := XDGConfigPath()
+	if xdgErr == nil {
+		if _, statErr := os.Stat(xdgPath); statErr == nil {
+			return xdgPath, true, nil
+		}
+	}
+	// 回退到 .env
+	return ".env", false, nil
+}
+
+// tomlToConfig 将单 provider 的 TOML 配置转换为 *Config，未指定的字段使用默认值。
+func tomlToConfig(name string, tc *TomlProviderConfig) *Config {
+	cfg := DefaultConfig()
+	cfg.TargetBase = tc.Target
+	cfg.GenaiBase = tc.Genai
+	if tc.Port > 0 {
+		cfg.Port = tc.Port
+	}
+	if tc.CooldownSec > 0 {
+		cfg.CooldownSec = tc.CooldownSec
+	}
+	if tc.MaxRetries > 0 {
+		cfg.MaxRetries = tc.MaxRetries
+	}
+	return cfg
+}
+
+// configToToml 将 *Config 转换为 *TomlConfig（用于写入 TOML 文件）。
+func configToToml(cfg *Config) *TomlConfig {
+	return &TomlConfig{
+		Provider: map[string]TomlProviderConfig{
+			"default": {
+				Target:      cfg.TargetBase,
+				Genai:       cfg.GenaiBase,
+				Port:        cfg.Port,
+				CooldownSec: cfg.CooldownSec,
+				MaxRetries:  cfg.MaxRetries,
+			},
+		},
+	}
 }
