@@ -1,9 +1,7 @@
-package main
+package cmd
 
 import (
 	"context"
-	_ "embed"
-	"flag"
 	"fmt"
 	"log"
 	"log/slog"
@@ -16,21 +14,24 @@ import (
 	"time"
 
 	"alvus/internal/server"
+
+	"github.com/spf13/cobra"
 )
 
-//go:embed dashboard.html
-var dashboardHTML string
+var startCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start the API key rotation proxy server",
+	Long:  "Loads configuration, initializes the key pool, and starts the HTTP proxy server.",
+	Run: func(cmd *cobra.Command, args []string) {
+		local, _ := cmd.Flags().GetBool("local")
+		networkOnly, _ := cmd.Flags().GetBool("network-only")
+		tag, _ := cmd.Flags().GetString("tag")
+		startServer(dashHTML, local, networkOnly, tag)
+	},
+}
 
-// ── Main ──────────────────────────────────────
-
-func main() {
-	isLocal := flag.Bool("local", false, "Bind to 127.0.0.1 (local access only)")
-	isNetwork := flag.Bool("network-only", false, "Bind to 0.0.0.0 (accessible via LAN)")
-	managePath := flag.String("manage", "", "Path to manage.json for multi-instance mode")
-	processTag := flag.String("tag", "", "Process identity tag (empty = production)")
-	flag.Parse()
-
-	// Shared stop channel for graceful shutdown
+func startServer(dashboardHTML string, isLocal, isNetwork bool, processTag string) {
+	// ── Stop channel for graceful shutdown ────────
 	stop := make(chan struct{})
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -40,20 +41,15 @@ func main() {
 		close(stop)
 	}()
 
-	// ── Manage Mode ────────────────────────────
-	if *managePath != "" {
-		runManager(*managePath, *processTag, stop)
-		return
-	}
-
-	// ── Single Instance Mode (original) ────────
+	// ── Host binding ──────────────────────────────
 	host := "" // Default (binds to all interfaces)
-	if *isLocal {
+	if isLocal {
 		host = "127.0.0.1"
-	} else if *isNetwork {
+	} else if isNetwork {
 		host = "0.0.0.0"
 	}
 
+	// ── Config & Initialization ───────────────────
 	cfg, pool := server.LoadConfig()
 	server.ApplyLogLevel(cfg.LogLevel)
 	state := server.NewServerState(cfg, pool, dashboardHTML, cfg.KeysFile)
@@ -61,7 +57,7 @@ func main() {
 	// Initial key pool metric refresh
 	state.Metrics().RefreshKeyPoolGauge(pool)
 
-	// Use WaitGroup to ensure background goroutines complete before exit
+	// ── Background goroutines ─────────────────────
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -82,9 +78,8 @@ func main() {
 		server.ActiveHealthCheck(state, stop)
 	}()
 
+	// ── HTTP Server ───────────────────────────────
 	addr := fmt.Sprintf("%s:%d", host, cfg.Port)
-
-	// Check port availability and bind
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		slog.Error("port in use", "port", cfg.Port, "error", err)
@@ -106,8 +101,8 @@ func main() {
 	if displayHost == "" {
 		displayHost = "0.0.0.0"
 	}
-	if *processTag != "" {
-		slog.Info("starting", "tag", *processTag, "port", cfg.Port, "keys", len(pool.Keys()), "target", cfg.TargetBase, "genai", cfg.GenaiBase)
+	if processTag != "" {
+		slog.Info("starting", "tag", processTag, "port", cfg.Port, "keys", len(pool.Keys()), "target", cfg.TargetBase, "genai", cfg.GenaiBase)
 	} else {
 		slog.Info("starting", "port", cfg.Port, "keys", len(pool.Keys()), "target", cfg.TargetBase, "genai", cfg.GenaiBase)
 	}
@@ -116,7 +111,10 @@ func main() {
 		log.Fatalf("Server error: %v", err)
 	}
 
-	// Wait for all background goroutines to finish before exiting
 	wg.Wait()
 	slog.Info("server stopped gracefully")
+}
+
+func init() {
+	rootCmd.AddCommand(startCmd)
 }

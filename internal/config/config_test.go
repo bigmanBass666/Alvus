@@ -775,3 +775,227 @@ func TestConfig_EncryptionKey_SanitizedExcluded(t *testing.T) {
 		t.Error("Sanitized() should have nil EncryptionKey")
 	}
 }
+
+// ============================================================
+// TOML 配置测试
+// ============================================================
+
+func TestLoadToml_ExistingFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	tomlPath := filepath.Join(tmpDir, "config.toml")
+	content := `[provider.default]
+target = "https://api.example.com"
+genai = "https://ai.example.com"
+port = 9090
+cooldown_sec = 45
+max_retries = 7
+`
+	if err := os.WriteFile(tomlPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadToml(tomlPath)
+	if err != nil {
+		t.Fatalf("LoadToml() unexpected error: %v", err)
+	}
+	if cfg.TargetBase != "https://api.example.com" {
+		t.Errorf("TargetBase = %q, want %q", cfg.TargetBase, "https://api.example.com")
+	}
+	if cfg.GenaiBase != "https://ai.example.com" {
+		t.Errorf("GenaiBase = %q, want %q", cfg.GenaiBase, "https://ai.example.com")
+	}
+	if cfg.Port != 9090 {
+		t.Errorf("Port = %d, want %d", cfg.Port, 9090)
+	}
+	if cfg.CooldownSec != 45 {
+		t.Errorf("CooldownSec = %d, want %d", cfg.CooldownSec, 45)
+	}
+	if cfg.MaxRetries != 7 {
+		t.Errorf("MaxRetries = %d, want %d", cfg.MaxRetries, 7)
+	}
+}
+
+func TestLoadToml_NotExist(t *testing.T) {
+	_, err := LoadToml("/nonexistent/path/config.toml")
+	if err == nil {
+		t.Error("LoadToml() expected error for non-existent file, got nil")
+	}
+}
+
+func TestLoadToml_Malformed(t *testing.T) {
+	tmpDir := t.TempDir()
+	tomlPath := filepath.Join(tmpDir, "bad.toml")
+	if err := os.WriteFile(tomlPath, []byte("this is not toml {{"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadToml(tomlPath)
+	if err == nil {
+		t.Error("LoadToml() expected error for malformed TOML, got nil")
+	}
+}
+
+func TestSaveToml_LoadToml_Roundtrip(t *testing.T) {
+	orig := DefaultConfig()
+	orig.TargetBase = "https://api.example.com"
+	orig.GenaiBase = "https://ai.example.com"
+	orig.Port = 7070
+	orig.CooldownSec = 30
+	orig.MaxRetries = 5
+
+	tmpDir := t.TempDir()
+	tomlPath := filepath.Join(tmpDir, "roundtrip.toml")
+	if err := SaveToml(orig, tomlPath); err != nil {
+		t.Fatalf("SaveToml() error: %v", err)
+	}
+
+	loaded, err := LoadToml(tomlPath)
+	if err != nil {
+		t.Fatalf("LoadToml() error: %v", err)
+	}
+
+	if loaded.TargetBase != orig.TargetBase {
+		t.Errorf("TargetBase = %q, want %q", loaded.TargetBase, orig.TargetBase)
+	}
+	if loaded.GenaiBase != orig.GenaiBase {
+		t.Errorf("GenaiBase = %q, want %q", loaded.GenaiBase, orig.GenaiBase)
+	}
+	if loaded.Port != orig.Port {
+		t.Errorf("Port = %d, want %d", loaded.Port, orig.Port)
+	}
+	if loaded.CooldownSec != orig.CooldownSec {
+		t.Errorf("CooldownSec = %d, want %d", loaded.CooldownSec, orig.CooldownSec)
+	}
+	if loaded.MaxRetries != orig.MaxRetries {
+		t.Errorf("MaxRetries = %d, want %d", loaded.MaxRetries, orig.MaxRetries)
+	}
+}
+
+func TestLoadToml_MissingFieldsUseDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	tomlPath := filepath.Join(tmpDir, "minimal.toml")
+	content := `[provider.default]
+target = "https://api.example.com"
+`
+	if err := os.WriteFile(tomlPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadToml(tomlPath)
+	if err != nil {
+		t.Fatalf("LoadToml() unexpected error: %v", err)
+	}
+	// TargetBase should be set from TOML
+	if cfg.TargetBase != "https://api.example.com" {
+		t.Errorf("TargetBase = %q, want %q", cfg.TargetBase, "https://api.example.com")
+	}
+	// GenaiBase should be empty (not set in TOML)
+	if cfg.GenaiBase != "" {
+		t.Errorf("GenaiBase = %q, want empty", cfg.GenaiBase)
+	}
+	// Port should use default from DefaultConfig
+	if cfg.Port != 8080 {
+		t.Errorf("Port = %d, want default 8080", cfg.Port)
+	}
+	// CooldownSec should use default from DefaultConfig
+	if cfg.CooldownSec != 60 {
+		t.Errorf("CooldownSec = %d, want default 60", cfg.CooldownSec)
+	}
+	// MaxRetries should use default from DefaultConfig
+	if cfg.MaxRetries != 3 {
+		t.Errorf("MaxRetries = %d, want default 3", cfg.MaxRetries)
+	}
+}
+
+func TestXDGConfigPath(t *testing.T) {
+	path, err := XDGConfigPath()
+	if err != nil {
+		t.Fatalf("XDGConfigPath() unexpected error: %v", err)
+	}
+	if path == "" {
+		t.Error("XDGConfigPath() returned empty path")
+	}
+}
+
+func TestDetectConfigSource_SpecifiedPath(t *testing.T) {
+	source, fromToml, err := DetectConfigSource("/custom/path/alvus.toml")
+	if err != nil {
+		t.Fatalf("DetectConfigSource() unexpected error: %v", err)
+	}
+	if source != "/custom/path/alvus.toml" {
+		t.Errorf("source = %q, want %q", source, "/custom/path/alvus.toml")
+	}
+	if !fromToml {
+		t.Error("fromToml = false, want true for .toml path")
+	}
+}
+
+func TestDetectConfigSource_DefaultToEnv(t *testing.T) {
+	// Check if XDG config already exists; if so, test must account for it
+	xdgPath, _ := XDGConfigPath()
+	if _, err := os.Stat(xdgPath); err == nil {
+		t.Skipf("XDG config exists at %s, would interfere with fallback test", xdgPath)
+	}
+
+	source, fromToml, err := DetectConfigSource("")
+	if err != nil {
+		t.Fatalf("DetectConfigSource() unexpected error: %v", err)
+	}
+	if source != ".env" {
+		t.Errorf("source = %q, want %q (no XDG config)", source, ".env")
+	}
+	if fromToml {
+		t.Error("fromToml = true, want false (no XDG config)")
+	}
+}
+
+func TestLoadToml_WithGenai(t *testing.T) {
+	tmpDir := t.TempDir()
+	tomlPath := filepath.Join(tmpDir, "genai.toml")
+	content := `[provider.default]
+target = "https://api.example.com"
+genai = "https://genai.example.com"
+`
+	if err := os.WriteFile(tomlPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadToml(tomlPath)
+	if err != nil {
+		t.Fatalf("LoadToml() unexpected error: %v", err)
+	}
+	if cfg.GenaiBase != "https://genai.example.com" {
+		t.Errorf("GenaiBase = %q, want %q", cfg.GenaiBase, "https://genai.example.com")
+	}
+	if cfg.TargetBase != "https://api.example.com" {
+		t.Errorf("TargetBase = %q, want %q", cfg.TargetBase, "https://api.example.com")
+	}
+}
+
+func TestLoadToml_MultiProvider(t *testing.T) {
+	tmpDir := t.TempDir()
+	tomlPath := filepath.Join(tmpDir, "multi.toml")
+	content := `[provider.primary]
+target = "https://primary.example.com"
+genai = "https://ai.primary.example.com"
+port = 9090
+
+[provider.secondary]
+target = "https://secondary.example.com"
+genai = "https://ai.secondary.example.com"
+port = 8080
+`
+	if err := os.WriteFile(tomlPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadToml(tomlPath)
+	if err != nil {
+		t.Fatalf("LoadToml() unexpected error: %v", err)
+	}
+	// Should use first provider (primary) as the main config
+	if cfg.TargetBase != "https://primary.example.com" {
+		t.Errorf("TargetBase = %q, want %q (first provider)", cfg.TargetBase, "https://primary.example.com")
+	}
+	if cfg.GenaiBase != "https://ai.primary.example.com" {
+		t.Errorf("GenaiBase = %q, want %q (first provider)", cfg.GenaiBase, "https://ai.primary.example.com")
+	}
+	if cfg.Port != 9090 {
+		t.Errorf("Port = %d, want %d (first provider)", cfg.Port, 9090)
+	}
+}

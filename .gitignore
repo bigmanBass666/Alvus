@@ -1,7 +1,7 @@
 .env
 
-alvus
-alvus.exe
+/alvus
+/alvus.exe
 alvus-linux-386
 
 # User-specific config (use manage.example.json as template)
