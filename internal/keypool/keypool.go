@@ -20,7 +20,7 @@ type KeyPool struct {
 	disabled       []bool
 	requestHistory [][]time.Time // timestamps of requests in the last 60s per key
 	lastUsed       []time.Time
-	mu             sync.Mutex
+	mu             sync.RWMutex
 }
 
 // NewKeyPool creates a KeyPool from slices of API keys and optional names.
@@ -44,8 +44,8 @@ func NewKeyPool(keys []string, names []string) *KeyPool {
 
 // Keys returns a copy of all keys in the pool.
 func (p *KeyPool) Keys() []string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	result := make([]string, len(p.keys))
 	copy(result, p.keys)
 	return result
@@ -53,8 +53,8 @@ func (p *KeyPool) Keys() []string {
 
 // Name returns the name of a key by index, or empty string if index is out of range.
 func (p *KeyPool) Name(idx int) string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if idx < 0 || idx >= len(p.names) {
 		return ""
 	}
@@ -64,8 +64,8 @@ func (p *KeyPool) Name(idx int) string {
 // TimeUntilAvailable returns the shortest duration until any key becomes available,
 // or -1 if all keys are disabled. Returns 0 if at least one key is ready.
 func (p *KeyPool) TimeUntilAvailable() time.Duration {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	now := time.Now()
 	var soonest time.Duration = -1
 	for i, cd := range p.cooldowns {
@@ -101,6 +101,7 @@ func (p *KeyPool) Next() (int, string, bool) {
 }
 
 // RequestsInLastMinute returns the number of requests made by a key in the last 60 seconds.
+// Caller must hold at least RLock.
 func (p *KeyPool) RequestsInLastMinute(idx int) int {
 	cutoff := time.Now().Add(-60 * time.Second)
 	count := 0
@@ -169,8 +170,8 @@ func (p *KeyPool) Disable(idx int) error {
 // IsDisabled returns whether a key is disabled by index.
 // Returns false if the index is out of range.
 func (p *KeyPool) IsDisabled(idx int) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if idx < 0 || idx >= len(p.disabled) {
 		return false
 	}
@@ -179,8 +180,8 @@ func (p *KeyPool) IsDisabled(idx int) bool {
 
 // ActiveCount returns the number of non-disabled keys.
 func (p *KeyPool) ActiveCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	n := 0
 	for i := range p.keys {
 		if !p.disabled[i] {
@@ -192,8 +193,8 @@ func (p *KeyPool) ActiveCount() int {
 
 // DisabledCount returns the number of disabled keys.
 func (p *KeyPool) DisabledCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	n := 0
 	for _, d := range p.disabled {
 		if d {
@@ -205,8 +206,8 @@ func (p *KeyPool) DisabledCount() int {
 
 // CoolingCount returns the number of keys currently in cooldown (not disabled, but cooldown not yet expired).
 func (p *KeyPool) CoolingCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	now := time.Now()
 	n := 0
 	for i := range p.keys {
@@ -218,6 +219,7 @@ func (p *KeyPool) CoolingCount() int {
 }
 
 // KeyStatusLabel returns a status string for a key (disabled, ready, or cooling).
+// Caller must hold at least RLock.
 func (p *KeyPool) KeyStatusLabel(i int, now time.Time) string {
 	cd := p.cooldowns[i]
 	switch {
@@ -232,8 +234,8 @@ func (p *KeyPool) KeyStatusLabel(i int, now time.Time) string {
 
 // Status returns a human-readable status string for all keys.
 func (p *KeyPool) Status() string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	now := time.Now()
 	parts := make([]string, len(p.keys))
 	for i := range p.keys {
@@ -244,8 +246,8 @@ func (p *KeyPool) Status() string {
 
 // GetKeyDetails returns detailed status for each key in the pool.
 func (p *KeyPool) GetKeyDetails() []map[string]interface{} {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	now := time.Now()
 	details := make([]map[string]interface{}, len(p.keys))
 	for i := range p.keys {
