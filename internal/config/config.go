@@ -585,13 +585,45 @@ func SaveToml(cfg *Config, path string) error {
 	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
+// LoadTomlConfig 读取 TOML 配置文件并返回完整的 TomlConfig（包含所有 provider）。
+// 文件不存在时返回原始错误（可通过 os.IsNotExist 检查）。
+func LoadTomlConfig(path string) (*TomlConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var tc TomlConfig
+	if err := toml.Unmarshal(data, &tc); err != nil {
+		return nil, err
+	}
+	if tc.Provider == nil {
+		tc.Provider = make(map[string]TomlProviderConfig)
+	}
+	return &tc, nil
+}
+
+// SaveTomlConfig 将完整 TomlConfig 写入 TOML 文件。覆盖已存在的文件。
+func SaveTomlConfig(tc *TomlConfig, path string) error {
+	var buf bytes.Buffer
+	encoder := toml.NewEncoder(&buf)
+	if err := encoder.Encode(tc); err != nil {
+		return fmt.Errorf("TOML 编码失败: %w", err)
+	}
+	return os.WriteFile(path, buf.Bytes(), 0644)
+}
+
 // XDGConfigPath 返回平台相关的 XDG 配置路径。
 // Windows: %APPDATA%/alvus/config.toml
 // Linux/macOS: $XDG_CONFIG_HOME/alvus/config.toml → ~/.config/alvus/config.toml
+// $XDG_CONFIG_HOME 环境变量优先于平台默认值（在所有平台上均生效）。
 func XDGConfigPath() (string, error) {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("获取用户配置目录失败: %w", err)
+	configDir := os.Getenv("XDG_CONFIG_HOME")
+	if configDir == "" {
+		var err error
+		configDir, err = os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("获取用户配置目录失败: %w", err)
+		}
 	}
 	return filepath.Join(configDir, "alvus", "config.toml"), nil
 }

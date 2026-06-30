@@ -4,7 +4,7 @@
 
 ---
 
-✅ **已完成 26 项核心功能，275 测试通过（详见 git log）。**
+✅ **已完成 26 项核心功能，285 测试通过（详见 git log）。**
 
 ---
 
@@ -106,13 +106,18 @@
 | `healthcheck_test.go` | 5 | **集成验收测试** |
 | `docker_compose_test.go` | 5 | **集成验收测试** |
 | `config_cmd_test.go` | 3 | **集成验收测试** |
-| **总计** | **275** | |
+| `provider_cmd_test.go` | 5 | **集成验收测试** |
+| `key_cmd_test.go` | 5 | **集成验收测试** |
+| **总计** | **285** | |
 
-> ✅ Spec B (InstanceManager) 已完成: `alvus start` 现支持单进程多实例运行，替代 manage.go 子进程模式。
-> - `LoadAllTomlProviders` — 从 config.toml 读取多个 provider
-> - `InstanceManager` — 管理多实例生命周期（启动/优雅关闭/后台任务）
-> - 向后兼容: `.env` 单 provider 模式不变
-> - `--manage manage.json` 模式保留（过渡期）
+> ✅ Spec C (管理命令) 已完成: `alvus provider/key/status/logs/stop` 子命令。
+> - `alvus provider add | list | remove` — provider 配置管理
+> - `alvus key add | list | remove | disable` — Key 加密存储管理
+> - `alvus status` — 查询运行实例健康状态与统计
+> - `alvus logs [provider]` — tail 运行实例的请求日志
+> - `alvus stop` — 通过 PID 文件优雅停止
+> - `manage.go` 已删除（InstanceManager 完全替代子进程模式）
+> - `config init` 生成多 provider 示例配置
 
 ### 压测基线（参考）
 | 场景 | 结果 |
