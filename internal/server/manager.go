@@ -30,7 +30,6 @@ type ManagedInstance struct {
 type InstanceManager struct {
 	instances     map[string]*ManagedInstance
 	mu            sync.RWMutex
-	stop          chan struct{}
 	wg            sync.WaitGroup
 	dashboardHTML string
 }
@@ -39,7 +38,6 @@ type InstanceManager struct {
 func NewInstanceManager(dashboardHTML string) *InstanceManager {
 	return &InstanceManager{
 		instances:     make(map[string]*ManagedInstance),
-		stop:          make(chan struct{}),
 		dashboardHTML: dashboardHTML,
 	}
 }
@@ -165,7 +163,6 @@ func (im *InstanceManager) Stop() {
 		close(inst.stop)
 	}
 	im.mu.RUnlock()
-	close(im.stop)
 	im.wg.Wait()
 }
 

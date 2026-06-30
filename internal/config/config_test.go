@@ -904,6 +904,218 @@ target = "https://api.example.com"
 	}
 }
 
+// ============================================================
+// TomlProviderConfig 扩展字段测试
+// ============================================================
+
+func TestTomlProviderConfig_AllFields(t *testing.T) {
+	content := `[provider.default]
+	target = "https://api.example.com"
+	genai = "https://ai.example.com"
+	port = 7070
+	cooldown_sec = 45
+	max_retries = 7
+	disable_thinking = true
+	genai_model = "opus-4.8"
+	log_level = "debug"
+	admin_token = "myadmintoken"
+	keys_file = "/data/keys.json"
+	backoff_cap_sec = 300
+	backoff_multiplier = 3.5
+	cb_reset_sec = 60
+	upstream_cb_threshold = 10
+	health_check_interval_sec = 15
+`
+	path := writeTempToml(t, content)
+	cfg, err := LoadToml(path)
+	if err != nil {
+		t.Fatalf("LoadToml() unexpected error: %v", err)
+	}
+
+	if cfg.TargetBase != "https://api.example.com" {
+		t.Errorf("TargetBase = %q, want %q", cfg.TargetBase, "https://api.example.com")
+	}
+	if cfg.GenaiBase != "https://ai.example.com" {
+		t.Errorf("GenaiBase = %q, want %q", cfg.GenaiBase, "https://ai.example.com")
+	}
+	if cfg.Port != 7070 {
+		t.Errorf("Port = %d, want %d", cfg.Port, 7070)
+	}
+	if cfg.CooldownSec != 45 {
+		t.Errorf("CooldownSec = %d, want %d", cfg.CooldownSec, 45)
+	}
+	if cfg.MaxRetries != 7 {
+		t.Errorf("MaxRetries = %d, want %d", cfg.MaxRetries, 7)
+	}
+	if !cfg.DisableThinking {
+		t.Error("DisableThinking = false, want true")
+	}
+	if cfg.GenaiModel != "opus-4.8" {
+		t.Errorf("GenaiModel = %q, want %q", cfg.GenaiModel, "opus-4.8")
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "debug")
+	}
+	if cfg.AdminToken != "myadmintoken" {
+		t.Errorf("AdminToken = %q, want %q", cfg.AdminToken, "myadmintoken")
+	}
+	if cfg.KeysFile != "/data/keys.json" {
+		t.Errorf("KeysFile = %q, want %q", cfg.KeysFile, "/data/keys.json")
+	}
+	if cfg.BackoffCapSec != 300 {
+		t.Errorf("BackoffCapSec = %d, want %d", cfg.BackoffCapSec, 300)
+	}
+	if cfg.BackoffMultiplier != 3.5 {
+		t.Errorf("BackoffMultiplier = %g, want %g", cfg.BackoffMultiplier, 3.5)
+	}
+	if cfg.CBResetSec != 60 {
+		t.Errorf("CBResetSec = %d, want %d", cfg.CBResetSec, 60)
+	}
+	if cfg.UpstreamCBThreshold != 10 {
+		t.Errorf("UpstreamCBThreshold = %d, want %d", cfg.UpstreamCBThreshold, 10)
+	}
+	if cfg.HealthCheckIntervalSec != 15 {
+		t.Errorf("HealthCheckIntervalSec = %d, want %d", cfg.HealthCheckIntervalSec, 15)
+	}
+}
+
+func TestTomlProviderConfig_DefaultValues(t *testing.T) {
+	content := `[provider.default]
+	target = "https://api.example.com"
+	genai = "https://ai.example.com"
+`
+	path := writeTempToml(t, content)
+	cfg, err := LoadToml(path)
+	if err != nil {
+		t.Fatalf("LoadToml() unexpected error: %v", err)
+	}
+
+	// Core fields set from TOML
+	if cfg.TargetBase != "https://api.example.com" {
+		t.Errorf("TargetBase = %q, want %q", cfg.TargetBase, "https://api.example.com")
+	}
+	if cfg.GenaiBase != "https://ai.example.com" {
+		t.Errorf("GenaiBase = %q, want %q", cfg.GenaiBase, "https://ai.example.com")
+	}
+
+	// All optional fields should fall through to DefaultConfig
+	if cfg.Port != 8080 {
+		t.Errorf("Port = %d, want default 8080", cfg.Port)
+	}
+	if cfg.CooldownSec != 60 {
+		t.Errorf("CooldownSec = %d, want default 60", cfg.CooldownSec)
+	}
+	if cfg.MaxRetries != 3 {
+		t.Errorf("MaxRetries = %d, want default 3", cfg.MaxRetries)
+	}
+	if cfg.DisableThinking {
+		t.Error("DisableThinking = true, want default false")
+	}
+	if cfg.GenaiModel != "" {
+		t.Errorf("GenaiModel = %q, want empty", cfg.GenaiModel)
+	}
+	if cfg.LogLevel != "info" {
+		t.Errorf("LogLevel = %q, want default %q", cfg.LogLevel, "info")
+	}
+	if cfg.AdminToken != "" {
+		t.Errorf("AdminToken = %q, want empty", cfg.AdminToken)
+	}
+	if cfg.KeysFile != "keys.json" {
+		t.Errorf("KeysFile = %q, want default %q", cfg.KeysFile, "keys.json")
+	}
+	if cfg.BackoffCapSec != 120 {
+		t.Errorf("BackoffCapSec = %d, want default %d", cfg.BackoffCapSec, 120)
+	}
+	if cfg.BackoffMultiplier != 2 {
+		t.Errorf("BackoffMultiplier = %g, want default %g", cfg.BackoffMultiplier, 2.0)
+	}
+	if cfg.CBResetSec != 30 {
+		t.Errorf("CBResetSec = %d, want default %d", cfg.CBResetSec, 30)
+	}
+	if cfg.UpstreamCBThreshold != 5 {
+		t.Errorf("UpstreamCBThreshold = %d, want default %d", cfg.UpstreamCBThreshold, 5)
+	}
+	if cfg.HealthCheckIntervalSec != 30 {
+		t.Errorf("HealthCheckIntervalSec = %d, want default %d", cfg.HealthCheckIntervalSec, 30)
+	}
+}
+
+func TestTomlProviderConfig_Roundtrip(t *testing.T) {
+	orig := DefaultConfig()
+	orig.TargetBase = "https://api.example.com"
+	orig.GenaiBase = "https://ai.example.com"
+	orig.Port = 7070
+	orig.CooldownSec = 45
+	orig.MaxRetries = 7
+	orig.DisableThinking = true
+	orig.GenaiModel = "sonnet-4.6"
+	orig.LogLevel = "warn"
+	orig.AdminToken = "secrettoken"
+	orig.KeysFile = "/app/keys.json"
+	orig.BackoffCapSec = 300
+	orig.BackoffMultiplier = 3.5
+	orig.CBResetSec = 60
+	orig.UpstreamCBThreshold = 10
+	orig.HealthCheckIntervalSec = 15
+
+	tmpDir := t.TempDir()
+	tomlPath := filepath.Join(tmpDir, "roundtrip_ext.toml")
+	if err := SaveToml(orig, tomlPath); err != nil {
+		t.Fatalf("SaveToml() error: %v", err)
+	}
+
+	loaded, err := LoadToml(tomlPath)
+	if err != nil {
+		t.Fatalf("LoadToml() error: %v", err)
+	}
+
+	if loaded.TargetBase != orig.TargetBase {
+		t.Errorf("TargetBase = %q, want %q", loaded.TargetBase, orig.TargetBase)
+	}
+	if loaded.GenaiBase != orig.GenaiBase {
+		t.Errorf("GenaiBase = %q, want %q", loaded.GenaiBase, orig.GenaiBase)
+	}
+	if loaded.Port != orig.Port {
+		t.Errorf("Port = %d, want %d", loaded.Port, orig.Port)
+	}
+	if loaded.CooldownSec != orig.CooldownSec {
+		t.Errorf("CooldownSec = %d, want %d", loaded.CooldownSec, orig.CooldownSec)
+	}
+	if loaded.MaxRetries != orig.MaxRetries {
+		t.Errorf("MaxRetries = %d, want %d", loaded.MaxRetries, orig.MaxRetries)
+	}
+	if loaded.DisableThinking != orig.DisableThinking {
+		t.Errorf("DisableThinking = %v, want %v", loaded.DisableThinking, orig.DisableThinking)
+	}
+	if loaded.GenaiModel != orig.GenaiModel {
+		t.Errorf("GenaiModel = %q, want %q", loaded.GenaiModel, orig.GenaiModel)
+	}
+	if loaded.LogLevel != orig.LogLevel {
+		t.Errorf("LogLevel = %q, want %q", loaded.LogLevel, orig.LogLevel)
+	}
+	if loaded.AdminToken != orig.AdminToken {
+		t.Errorf("AdminToken = %q, want %q", loaded.AdminToken, orig.AdminToken)
+	}
+	if loaded.KeysFile != orig.KeysFile {
+		t.Errorf("KeysFile = %q, want %q", loaded.KeysFile, orig.KeysFile)
+	}
+	if loaded.BackoffCapSec != orig.BackoffCapSec {
+		t.Errorf("BackoffCapSec = %d, want %d", loaded.BackoffCapSec, orig.BackoffCapSec)
+	}
+	if loaded.BackoffMultiplier != orig.BackoffMultiplier {
+		t.Errorf("BackoffMultiplier = %g, want %g", loaded.BackoffMultiplier, orig.BackoffMultiplier)
+	}
+	if loaded.CBResetSec != orig.CBResetSec {
+		t.Errorf("CBResetSec = %d, want %d", loaded.CBResetSec, orig.CBResetSec)
+	}
+	if loaded.UpstreamCBThreshold != orig.UpstreamCBThreshold {
+		t.Errorf("UpstreamCBThreshold = %d, want %d", loaded.UpstreamCBThreshold, orig.UpstreamCBThreshold)
+	}
+	if loaded.HealthCheckIntervalSec != orig.HealthCheckIntervalSec {
+		t.Errorf("HealthCheckIntervalSec = %d, want %d", loaded.HealthCheckIntervalSec, orig.HealthCheckIntervalSec)
+	}
+}
+
 func TestXDGConfigPath(t *testing.T) {
 	path, err := XDGConfigPath()
 	if err != nil {
