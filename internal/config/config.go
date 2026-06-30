@@ -529,11 +529,21 @@ func loadDotEnv(filename string) error {
 
 // TomlProviderConfig 对应 TOML 中单个 [provider.*] 的配置。
 type TomlProviderConfig struct {
-	Target      string `toml:"target"`
-	Genai       string `toml:"genai,omitempty"`
-	Port        int    `toml:"port,omitempty"`
-	CooldownSec int    `toml:"cooldown_sec,omitempty"`
-	MaxRetries  int    `toml:"max_retries,omitempty"`
+	Target                 string  `toml:"target"`
+	Genai                  string  `toml:"genai,omitempty"`
+	Port                   int     `toml:"port,omitempty"`
+	CooldownSec            int     `toml:"cooldown_sec,omitempty"`
+	MaxRetries             int     `toml:"max_retries,omitempty"`
+	DisableThinking        bool    `toml:"disable_thinking,omitempty"`
+	GenaiModel             string  `toml:"genai_model,omitempty"`
+	LogLevel               string  `toml:"log_level,omitempty"`
+	AdminToken             string  `toml:"admin_token,omitempty"`
+	KeysFile               string  `toml:"keys_file,omitempty"`
+	BackoffCapSec          int     `toml:"backoff_cap_sec,omitempty"`
+	BackoffMultiplier      float64 `toml:"backoff_multiplier,omitempty"`
+	CBResetSec             int     `toml:"cb_reset_sec,omitempty"`
+	UpstreamCBThreshold    int     `toml:"upstream_cb_threshold,omitempty"`
+	HealthCheckIntervalSec int     `toml:"health_check_interval_sec,omitempty"`
 }
 
 // TomlConfig 对应整个 config.toml 文件结构。
@@ -692,6 +702,36 @@ func tomlToConfig(name string, tc *TomlProviderConfig) *Config {
 	if tc.MaxRetries > 0 {
 		cfg.MaxRetries = tc.MaxRetries
 	}
+	if tc.DisableThinking {
+		cfg.DisableThinking = true
+	}
+	if tc.GenaiModel != "" {
+		cfg.GenaiModel = tc.GenaiModel
+	}
+	if tc.LogLevel != "" {
+		cfg.LogLevel = tc.LogLevel
+	}
+	if tc.AdminToken != "" {
+		cfg.AdminToken = tc.AdminToken
+	}
+	if tc.KeysFile != "" {
+		cfg.KeysFile = tc.KeysFile
+	}
+	if tc.BackoffCapSec > 0 {
+		cfg.BackoffCapSec = tc.BackoffCapSec
+	}
+	if tc.BackoffMultiplier > 0 {
+		cfg.BackoffMultiplier = tc.BackoffMultiplier
+	}
+	if tc.CBResetSec > 0 {
+		cfg.CBResetSec = tc.CBResetSec
+	}
+	if tc.UpstreamCBThreshold > 0 {
+		cfg.UpstreamCBThreshold = tc.UpstreamCBThreshold
+	}
+	if tc.HealthCheckIntervalSec > 0 {
+		cfg.HealthCheckIntervalSec = tc.HealthCheckIntervalSec
+	}
 	return cfg
 }
 
@@ -700,11 +740,21 @@ func configToToml(cfg *Config) *TomlConfig {
 	return &TomlConfig{
 		Provider: map[string]TomlProviderConfig{
 			"default": {
-				Target:      cfg.TargetBase,
-				Genai:       cfg.GenaiBase,
-				Port:        cfg.Port,
-				CooldownSec: cfg.CooldownSec,
-				MaxRetries:  cfg.MaxRetries,
+				Target:                 cfg.TargetBase,
+				Genai:                  cfg.GenaiBase,
+				Port:                   cfg.Port,
+				CooldownSec:            cfg.CooldownSec,
+				MaxRetries:             cfg.MaxRetries,
+				DisableThinking:        cfg.DisableThinking,
+				GenaiModel:             cfg.GenaiModel,
+				LogLevel:               cfg.LogLevel,
+				AdminToken:             cfg.AdminToken,
+				KeysFile:               cfg.KeysFile,
+				BackoffCapSec:          cfg.BackoffCapSec,
+				BackoffMultiplier:      cfg.BackoffMultiplier,
+				CBResetSec:             cfg.CBResetSec,
+				UpstreamCBThreshold:    cfg.UpstreamCBThreshold,
+				HealthCheckIntervalSec: cfg.HealthCheckIntervalSec,
 			},
 		},
 	}

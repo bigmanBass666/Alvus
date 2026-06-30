@@ -9,6 +9,7 @@ import (
 
 	"alvus/internal/config"
 	"alvus/internal/keypool"
+	"alvus/internal/utils"
 
 	"github.com/spf13/cobra"
 )
@@ -38,16 +39,6 @@ func setupEncryption() {
 			keypool.SetEncryptionKey(key)
 		}
 	}
-}
-
-// maskKey returns a masked representation of the key for display.
-// If key length > 8: first 3 chars + "****" + last 2 chars
-// Otherwise: "****"
-func maskKey(key string) string {
-	if len(key) > 8 {
-		return key[:3] + "****" + key[len(key)-2:]
-	}
-	return "****"
 }
 
 func init() {
@@ -151,7 +142,7 @@ Example output:
 			if entry.Disabled {
 				status = "disabled"
 			}
-			line := fmt.Sprintf("  [%d] %s  (%s)", i, maskKey(entry.Key), status)
+			line := fmt.Sprintf("  [%d] %s  (%s)", i, utils.MaskKey(entry.Key), status)
 			if entry.Name != "" {
 				line += fmt.Sprintf("  name: %s", entry.Name)
 			}
@@ -207,7 +198,7 @@ Example:
 			return fmt.Errorf("failed to save keys for %q: %w", provider, err)
 		}
 
-		desc := maskKey(removed.Key)
+		desc := utils.MaskKey(removed.Key)
 		if removed.Name != "" {
 			desc += fmt.Sprintf(" (name: %s)", removed.Name)
 		}
@@ -261,7 +252,7 @@ Example:
 			return fmt.Errorf("failed to save keys for %q: %w", provider, err)
 		}
 
-		desc := maskKey(store.Keys[idx].Key)
+		desc := utils.MaskKey(store.Keys[idx].Key)
 		if store.Keys[idx].Name != "" {
 			desc += fmt.Sprintf(" (name: %s)", store.Keys[idx].Name)
 		}

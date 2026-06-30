@@ -375,7 +375,7 @@ func (s *ServerState) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	newCfg, newPool, err := ReloadConfig()
 	if err != nil {
 		slog.Warn("reload failed", "error", err)
-		s.respondJSON(w, http.StatusOK, map[string]interface{}{
+		s.respondJSON(w, http.StatusInternalServerError, map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
 		})

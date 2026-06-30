@@ -87,7 +87,7 @@ func TestKeyList_ShowsKeys(t *testing.T) {
 	if !strings.Contains(output, "listtest") {
 		t.Errorf("output missing provider name:\n%s", output)
 	}
-	if !strings.Contains(output, "****") {
+	if !strings.Contains(output, "...") {
 		t.Errorf("output missing masked key:\n%s", output)
 	}
 	if !strings.Contains(output, "active") {
