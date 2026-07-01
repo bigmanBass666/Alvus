@@ -15,7 +15,8 @@ var rootCmd = &cobra.Command{
 		local, _ := cmd.Flags().GetBool("local")
 		networkOnly, _ := cmd.Flags().GetBool("network-only")
 		tag, _ := cmd.Flags().GetString("tag")
-		startServer(dashHTML, local, networkOnly, tag)
+		providerFilter, _ := cmd.Flags().GetString("provider")
+		startServer(dashHTML, local, networkOnly, tag, providerFilter)
 	},
 }
 
@@ -36,5 +37,6 @@ func init() {
 	rootCmd.PersistentFlags().Bool("local", false, "Bind to 127.0.0.1 (local access only)")
 	rootCmd.PersistentFlags().Bool("network-only", false, "Bind to 0.0.0.0 (accessible via LAN)")
 	rootCmd.PersistentFlags().String("tag", "", "Process identity tag (empty = production)")
+	rootCmd.PersistentFlags().String("provider", "", "Only start the specified provider")
 	rootCmd.AddCommand(versionCmd)
 }

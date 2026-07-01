@@ -195,3 +195,78 @@ func TestStartCmd_PortConflict(t *testing.T) {
 		t.Errorf("healthy provider returned %d, want 200", resp.StatusCode)
 	}
 }
+
+// ── Test: alvus start --provider 过滤 ─────────────────────
+//
+// 创建两个 provider，用 --provider test-a 启动，
+// 验证只有 test-a 的端口可达，test-b 被过滤不可达。
+func TestStartCmd_ProviderFilter(t *testing.T) {
+	if os.Getenv("ALVUS_TEST_START_CHILD") == "1" {
+		os.Args = []string{"alvus", "start", "--local", "--provider", "test-a"}
+		cmd.Execute("")
+		return
+	}
+
+	resetConfigEnv()
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	// 创建两个 provider，各带一个 key
+	runCommand(t, "alvus", "provider", "add", "test-a",
+		"--target", "http://localhost:18999/v1",
+		"--genai", "http://localhost:18999",
+		"--port", "19305",
+	)
+	runCommand(t, "alvus", "key", "add", "test-a", "sk-test-key-aaa")
+
+	runCommand(t, "alvus", "provider", "add", "test-b",
+		"--target", "http://localhost:18999/v1",
+		"--genai", "http://localhost:18999",
+		"--port", "19306",
+	)
+	runCommand(t, "alvus", "key", "add", "test-b", "sk-test-key-bbb")
+
+	testExe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable failed: %v", err)
+	}
+
+	// 子进程带 --provider test-a 过滤参数
+	cmd := exec.Command(testExe, "-test.run=^TestStartCmd_ProviderFilter$")
+	cmd.Env = append(os.Environ(),
+		"ALVUS_TEST_START_CHILD=1",
+		"XDG_CONFIG_HOME="+tmpDir,
+	)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("subprocess start failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	// 轮询等待服务器就绪（最多 2 秒）
+	var healthOK bool
+	for i := 0; i < 20; i++ {
+		resp, err := http.Get("http://127.0.0.1:19305/health")
+		if err == nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				healthOK = true
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !healthOK {
+		t.Fatal("test-a health check never returned 200 within 2s")
+	}
+
+	// 验证 test-b 不可达（被 --provider 过滤掉）
+	_, err = http.Get("http://127.0.0.1:19306/health")
+	if err == nil {
+		t.Error("test-b should not be reachable (filtered by --provider)")
+	}
+}
