@@ -1,4 +1,4 @@
-package cmd
+﻿package cmd
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -59,19 +60,18 @@ func startServer(dashboardHTML string, isLocal, isNetwork bool, processTag strin
 			os.Exit(1)
 		}
 		for name, cfg := range providers {
+			server.ApplyLogLevel(cfg.LogLevel)
+
+			// Load API keys from encrypted store or env (before validation)
+			keys, keyNames := loadKeysForProvider(name, cfg)
+			cfg.Keys = keys
+			cfg.KeyNames = keyNames
+
 			if err := cfg.Validate(); err != nil {
 				slog.Error("invalid provider config", "provider", name, "error", err)
 				continue
 			}
-			server.ApplyLogLevel(cfg.LogLevel)
-
-			// Load API keys from keys file or env
-			keys, keyNames := loadKeysForProvider(cfg)
-			cfg.Keys = keys
-			cfg.KeyNames = keyNames
-			if len(keys) == 0 {
-				slog.Warn("no API keys configured, provider will be unavailable", "provider", name)
-			} else {
+			if len(keys) > 0 {
 				keypool.SetEncryptionKey(cfg.EncryptionKey)
 			}
 			pool := keypool.NewKeyPool(keys, keyNames)
@@ -135,23 +135,39 @@ func startServer(dashboardHTML string, isLocal, isNetwork bool, processTag strin
 }
 
 // loadKeysForProvider loads API keys for a provider from its keys file or env.
-func loadKeysForProvider(cfg *config.Config) (keys, names []string) {
+func loadKeysForProvider(name string, cfg *config.Config) (keys, names []string) {
 	keys = cfg.Keys
 	names = cfg.KeyNames
+
+	// If a custom keys file is configured and has keys, use it
 	if cfg.KeysFile != "" {
 		fileKeys, fileNames, err := keypool.LoadKeysFromFile(cfg.KeysFile)
 		if err == nil && fileKeys != nil {
-			// File exists — use its keys as source of truth
 			return fileKeys, fileNames
 		}
-		// File not found — auto-create from env keys if available
 		if len(keys) > 0 {
 			_ = keypool.SaveKeysToFile(cfg.KeysFile, keys, names)
+			return keys, names
 		}
+		// Custom path exists but no keys found — fall through to standard store
 	}
+
+	// Fallback: try the standard encrypted store path: <XDG>/keys/<name>.enc
+	xdgPath, err := config.XDGConfigPath()
+	if err != nil {
+		return keys, names
+	}
+	keyFile := filepath.Join(filepath.Dir(xdgPath), "keys", name+".enc")
+	fileKeys, fileNames, err := keypool.LoadKeysFromFile(keyFile)
+	if err == nil && fileKeys != nil {
+		return fileKeys, fileNames
+	}
+
 	return keys, names
 }
 
 func init() {
 	rootCmd.AddCommand(startCmd)
 }
+
+
