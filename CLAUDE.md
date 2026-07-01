@@ -64,6 +64,42 @@
 - ❌ 环境泄漏 — 子进程测试没有隔离环境变量，测试互相干扰
 - ❌ 跳过边缘情况 — Key 长度 ≤6 字符时 `MaskKey` 输出 `****`，不是常规格式
 
+### 关键路径覆盖纪律（2026-07-01 新增）
+
+> **所有 CLI 行为必须通过 CLI 入口测试。** 这条纪律是对"验收测试三问"的强制执行条款。
+
+#### 判断标准
+
+- **需要 CLI 入口测试**：任何可以从 CLI 命令到达的代码路径
+  - `internal/cmd/` 下的全部文件
+  - `startServer()`、`loadKeysForProvider()`、各种 `RunE` 函数
+- **不需要 CLI 入口测试**（纯内部逻辑）：
+  - 数据结构（`TomlProviderConfig`、`LogEntry`）
+  - 算法（`MaskKey`、`parseKeys`、circuit breaker 状态机）
+  - 纯工具函数
+
+#### 实现方式
+
+| 命令类型 | 测试方式 | 示例 |
+|---------|---------|------|
+| 非阻塞 CLI 命令（config、provider、key） | `runCommand(t, "alvus", ...)` | `provider_cmd_test.go` |
+| 阻塞/长运行 CLI 命令（start） | 子进程模式：启动 → 验证 → kill | `start_cmd_test.go` |
+
+#### PR 合并前自问
+
+1. 这个 PR 改动了哪些编码？
+2. 用户是通过哪个 CLI 命令接触到这些代码的？
+3. **那个 CLI 命令有没有对应的入口测试？**
+   - 没有 → 先写测试，再写代码
+   - 有 → 运行一次确认测试通过
+
+#### 这条纪律防止的 bug
+
+| 历史 bug | 根因 | 纪律能拦住吗？ |
+|---------|------|---------------|
+| Validate 在加载 Key 前调用 | `startServer()` 内部顺序错误，`startServer()` 零测试 | ✅ 入口测试会在 PR 阶段暴露 |
+| `loadKeysForProvider` 没查标准存储 | 函数未走 `KeysFile` fallback 路径 | ✅ 入口测试会验证 Key 真正被加载 |
+
 ## 项目定位
 
 与[ccswitch](https://github.com/farion1231/cc-switch/raw/refs/heads/main/docs/user-manual/zh/README.md)结合使用, ccswitch负责provider的轮转, 而alvus只专注于做单 provider 内的 api key 的轮转, 其他功能有其他已经极为成熟的工具如ccswitch搭配使用, alvus只专精于apikey轮转垂直领域
