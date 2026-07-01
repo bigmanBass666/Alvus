@@ -1,4 +1,4 @@
-﻿package cmd
+package cmd
 
 import (
 	"context"
@@ -25,11 +25,12 @@ var startCmd = &cobra.Command{
 		local, _ := cmd.Flags().GetBool("local")
 		networkOnly, _ := cmd.Flags().GetBool("network-only")
 		tag, _ := cmd.Flags().GetString("tag")
-		startServer(dashHTML, local, networkOnly, tag)
+		providerFilter, _ := cmd.Flags().GetString("provider")
+		startServer(dashHTML, local, networkOnly, tag, providerFilter)
 	},
 }
 
-func startServer(dashboardHTML string, isLocal, isNetwork bool, processTag string) {
+func startServer(dashboardHTML string, isLocal, isNetwork bool, processTag, providerFilter string) {
 	// ── Host binding ──────────────────────────────
 	host := "0.0.0.0" // Default (binds to all interfaces)
 	if isLocal {
@@ -60,6 +61,12 @@ func startServer(dashboardHTML string, isLocal, isNetwork bool, processTag strin
 			os.Exit(1)
 		}
 		for name, cfg := range providers {
+			// Apply provider filter if set
+			if providerFilter != "" && name != providerFilter {
+				slog.Debug("skipping provider (filtered by --provider)", "name", name)
+				continue
+			}
+
 			server.ApplyLogLevel(cfg.LogLevel)
 
 			// Load API keys from encrypted store or env (before validation)
@@ -84,8 +91,25 @@ func startServer(dashboardHTML string, isLocal, isNetwork bool, processTag strin
 				"target", cfg.TargetBase,
 			)
 		}
+
+		// Warn if filter was set but no provider matched
+		if providerFilter != "" {
+			found := false
+			for _, n := range mgr.InstanceNames() {
+				if n == providerFilter {
+					found = true
+					break
+				}
+			}
+			if !found {
+				slog.Warn("no provider matched --provider filter", "provider", providerFilter)
+			}
+		}
 	} else {
 		// ── .env mode: single provider (backward compat) ──
+		if providerFilter != "" {
+			slog.Warn("--provider filter ignored in .env mode (single provider only)")
+		}
 		cfg, pool := server.LoadConfig()
 		server.ApplyLogLevel(cfg.LogLevel)
 		mgr.AddInstance("default", cfg, pool)
@@ -169,5 +193,3 @@ func loadKeysForProvider(name string, cfg *config.Config) (keys, names []string)
 func init() {
 	rootCmd.AddCommand(startCmd)
 }
-
-
